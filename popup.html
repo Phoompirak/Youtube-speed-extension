@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 280px;
+      background: #0f0f14;
+      color: #fff;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      padding: 20px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .header .icon { font-size: 28px; }
+    .header .text h1 {
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .header .text p {
+      font-size: 11px;
+      color: rgba(255,255,255,0.4);
+      margin-top: 2px;
+    }
+    .info-box {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .info-box h3 {
+      font-size: 11px;
+      color: rgba(255,255,255,0.5);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .shortcut-row, .toggle-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 0;
+    }
+    .shortcut-row:not(:last-child), .toggle-row:not(:last-child) {
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .shortcut-row .label, .toggle-row .label {
+      font-size: 12px;
+      color: #bbb;
+    }
+    kbd {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 5px;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-family: 'Segoe UI', monospace;
+      color: #00ff64;
+    }
+    .switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex: 0 0 auto;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.14);
+      transition: 0.2s ease;
+      cursor: pointer;
+    }
+    .slider::before {
+      content: '';
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      left: 3px;
+      top: 2px;
+      border-radius: 50%;
+      background: #fff;
+      transition: 0.2s ease;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    }
+    input:checked + .slider {
+      background: linear-gradient(135deg, #ff3c3c, #ff8a3d);
+      border-color: rgba(255,60,60,0.5);
+      box-shadow: 0 0 16px rgba(255,60,60,0.25);
+    }
+    input:checked + .slider::before {
+      transform: translateX(20px);
+    }
+    .status {
+      text-align: center;
+      font-size: 11px;
+      color: rgba(255,255,255,0.3);
+      padding-top: 6px;
+    }
+    .status .dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #00ff64;
+      margin-right: 4px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="icon">?</div>
+    <div class="text">
+      <h1>YT Speed Controller</h1>
+      <p>v1.0.1 ? ???????? x1 ??? x16</p>
+    </div>
+  </div>
+
+  <div class="info-box">
+    <h3>Turbo Mode</h3>
+    <div class="toggle-row">
+      <span class="label">Turbo Mode ??</span>
+      <label class="switch" aria-label="Turbo Mode">
+        <input id="turboToggle" type="checkbox" />
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <div class="info-box">
+    <h3>?? Keyboard Shortcuts</h3>
+    <div class="shortcut-row">
+      <span class="label">?????????</span>
+      <kbd>]</kbd>
+    </div>
+    <div class="shortcut-row">
+      <span class="label">??????</span>
+      <kbd>[</kbd>
+    </div>
+    <div class="shortcut-row">
+      <span class="label">?????? x1</span>
+      <kbd>\</kbd>
+    </div>
+  </div>
+
+  <div class="info-box">
+    <h3>?? ???????</h3>
+    <p style="font-size:11px;color:#aaa;line-height:1.6">
+      ?????????? YouTube ?????????? Panel ??????????????? ?????????????????? Shortcut ??????!
+      ??? Header ????????????????
+    </p>
+  </div>
+
+  <div class="status">
+    <span class="dot"></span> Active ????????? YouTube
+  </div>
+
+  <script>
+    const turboToggle = document.getElementById('turboToggle');
+
+    function loadTurboState() {
+      chrome.storage.local.get(['yt_turbo'], (result) => {
+        turboToggle.checked = Boolean(result.yt_turbo);
+      });
+    }
+
+    turboToggle.addEventListener('change', () => {
+      chrome.storage.local.set({ yt_turbo: turboToggle.checked });
+    });
+
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== 'local' || !changes.yt_turbo) return;
+      turboToggle.checked = Boolean(changes.yt_turbo.newValue);
+    });
+
+    loadTurboState();
+  </script>
+</body>
+</html>

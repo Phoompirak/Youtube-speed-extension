@@ -1,0 +1,221 @@
+/* ===== YT Speed Controller — Injected Styles ===== */
+
+#yt-speed-panel {
+  position: fixed;
+  top: 80px;
+  right: 20px;
+  background: rgba(15, 15, 20, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: #fff;
+  padding: 0;
+  z-index: 999999;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  min-width: 230px;
+  user-select: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  transform-origin: top right;
+}
+
+#yt-speed-panel.collapsed {
+  min-width: unset;
+  width: auto;
+}
+
+#yt-speed-panel.collapsed .sc-grid,
+#yt-speed-panel.collapsed .sc-shortcut-hint {
+  display: none;
+}
+
+/* Header */
+.sc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: move;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sc-title {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sc-badge {
+  background: linear-gradient(135deg, rgba(0, 255, 100, 0.15), rgba(0, 200, 255, 0.1));
+  padding: 3px 10px;
+  border-radius: 20px;
+  color: #00ff64;
+  font-size: 14px;
+  font-weight: 800;
+  border: 1px solid rgba(0, 255, 100, 0.2);
+  text-shadow: 0 0 8px rgba(0, 255, 100, 0.3);
+  transition: all 0.2s ease;
+}
+
+/* Buttons Grid */
+.sc-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding: 12px 14px;
+}
+
+.sc-btn {
+  padding: 8px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #aaa;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  transition: all 0.15s ease;
+  outline: none;
+  position: relative;
+  overflow: hidden;
+}
+
+.sc-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: radial-gradient(circle at center, rgba(0, 255, 100, 0.15), transparent 70%);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.sc-btn:hover {
+  background: rgba(0, 255, 100, 0.08);
+  border-color: rgba(0, 255, 100, 0.3);
+  color: #00ff64;
+  transform: scale(1.05);
+}
+
+.sc-btn:hover::before {
+  opacity: 1;
+}
+
+.sc-btn.active {
+  background: rgba(0, 255, 100, 0.15);
+  border-color: rgba(0, 255, 100, 0.5);
+  color: #00ff64;
+  box-shadow: 0 0 12px rgba(0, 255, 100, 0.15);
+  text-shadow: 0 0 6px rgba(0, 255, 100, 0.4);
+}
+
+.sc-btn:active {
+  transform: scale(0.95);
+}
+
+/* Shortcut hint */
+.sc-shortcut-hint {
+  padding: 8px 14px 12px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.3);
+  text-align: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.sc-shortcut-hint kbd {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  font-family: inherit;
+}
+
+/* Toggle (collapse) button */
+.sc-toggle {
+  position: absolute;
+  top: -10px;
+  left: -10px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(30, 30, 40, 0.95);
+  color: #aaa;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 22px;
+  text-align: center;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.sc-toggle:hover {
+  background: rgba(0, 255, 100, 0.2);
+  color: #00ff64;
+  border-color: rgba(0, 255, 100, 0.4);
+}
+
+/* Turbo Mode styling */
+.sc-turbo-container {
+  padding: 0 14px 10px;
+  display: flex;
+  justify-content: center;
+}
+
+#yt-speed-panel.collapsed .sc-turbo-container {
+  display: none;
+}
+
+.sc-turbo-btn {
+  width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 60, 60, 0.2);
+  background: rgba(255, 60, 60, 0.05);
+  color: #ff4a4a;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  text-shadow: 0 0 8px rgba(255, 60, 60, 0.2);
+}
+
+.sc-turbo-btn:hover {
+  background: rgba(255, 60, 60, 0.15);
+  border-color: rgba(255, 60, 60, 0.5);
+  color: #ff5c5c;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 60, 60, 0.15);
+}
+
+.sc-turbo-btn.active {
+  background: linear-gradient(135deg, #ff3c3c, #ff763c);
+  border-color: #ff3c3c;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: 
+    0 0 15px rgba(255, 60, 60, 0.4),
+    0 0 2px rgba(255, 60, 60, 0.2) inset;
+  animation: pulse-glow 2s infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(255, 60, 60, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(255, 60, 60, 0.7);
+  }
+}
