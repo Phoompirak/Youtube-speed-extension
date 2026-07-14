@@ -3,87 +3,132 @@
 <head>
   <meta charset="UTF-8">
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
+
     body {
-      width: 280px;
-      background: #0f0f14;
-      color: #fff;
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      padding: 20px;
+      width: 300px;
+      background: #0c0c14;
+      color: #e0e0f0;
+      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      padding: 0;
+      overflow: hidden;
     }
+
+    /* ── Header ── */
     .header {
       display: flex;
       align-items: center;
-      gap: 10px;
-      margin-bottom: 16px;
+      gap: 12px;
+      padding: 16px 18px 14px;
+      background: linear-gradient(135deg, rgba(0,255,100,0.06), rgba(0,200,255,0.04));
+      border-bottom: 1px solid rgba(255,255,255,0.06);
     }
-    .header .icon { font-size: 28px; }
+
+    .header .icon {
+      font-size: 28px;
+      line-height: 1;
+    }
+
     .header .text h1 {
       font-size: 15px;
-      font-weight: 700;
+      font-weight: 800;
       color: #fff;
+      letter-spacing: 0.3px;
     }
+
     .header .text p {
       font-size: 11px;
-      color: rgba(255,255,255,0.4);
+      color: rgba(255,255,255,0.35);
       margin-top: 2px;
     }
-    .info-box {
-      background: rgba(255,255,255,0.05);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 10px;
-      padding: 14px;
-      margin-bottom: 14px;
+
+    /* ── Current Speed Display ── */
+    .speed-display {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      background: rgba(0,255,100,0.03);
     }
-    .info-box h3 {
+
+    .speed-display .label {
       font-size: 11px;
-      color: rgba(255,255,255,0.5);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 8px;
+      color: rgba(255,255,255,0.4);
+      font-weight: 500;
     }
-    .shortcut-row, .toggle-row {
+
+    .speed-display .value {
+      font-size: 22px;
+      font-weight: 900;
+      color: #00ff80;
+      text-shadow: 0 0 12px rgba(0,255,100,0.4);
+      letter-spacing: 0.5px;
+    }
+
+    /* ── Info Boxes ── */
+    .info-box {
+      margin: 10px 14px 0;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+
+    .info-box:last-of-type {
+      margin-bottom: 12px;
+    }
+
+    .info-box h3 {
+      font-size: 10px;
+      color: rgba(255,255,255,0.35);
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    .toggle-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
       padding: 5px 0;
     }
-    .shortcut-row:not(:last-child), .toggle-row:not(:last-child) {
+
+    .toggle-row:not(:last-child) {
       border-bottom: 1px solid rgba(255,255,255,0.04);
+      padding-bottom: 9px;
+      margin-bottom: 4px;
     }
-    .shortcut-row .label, .toggle-row .label {
+
+    .toggle-row .label {
       font-size: 12px;
-      color: #bbb;
+      color: #ccc;
+      font-weight: 500;
     }
-    kbd {
-      background: rgba(255,255,255,0.1);
-      border: 1px solid rgba(255,255,255,0.15);
-      border-radius: 5px;
-      padding: 2px 8px;
-      font-size: 12px;
-      font-family: 'Segoe UI', monospace;
-      color: #00ff64;
-    }
+
+    /* ── Toggle Switch ── */
     .switch {
       position: relative;
       width: 44px;
       height: 24px;
       flex: 0 0 auto;
     }
-    .switch input {
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
+
+    .switch input { opacity: 0; width: 0; height: 0; }
+
     .slider {
       position: absolute;
       inset: 0;
       border-radius: 999px;
-      background: rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.1);
       border: 1px solid rgba(255,255,255,0.14);
-      transition: 0.2s ease;
+      transition: 0.22s ease;
       cursor: pointer;
     }
+
     .slider::before {
       content: '';
       position: absolute;
@@ -93,105 +138,210 @@
       top: 2px;
       border-radius: 50%;
       background: #fff;
-      transition: 0.2s ease;
+      transition: 0.22s ease;
       box-shadow: 0 2px 8px rgba(0,0,0,0.35);
     }
+
     input:checked + .slider {
+      background: linear-gradient(135deg, #00cc66, #00cfff);
+      border-color: rgba(0,200,100,0.5);
+      box-shadow: 0 0 14px rgba(0,200,100,0.25);
+    }
+
+    /* Turbo toggle uses red */
+    #turboToggle:checked + .slider {
       background: linear-gradient(135deg, #ff3c3c, #ff8a3d);
       border-color: rgba(255,60,60,0.5);
-      box-shadow: 0 0 16px rgba(255,60,60,0.25);
+      box-shadow: 0 0 14px rgba(255,60,60,0.25);
     }
-    input:checked + .slider::before {
-      transform: translateX(20px);
+
+    input:checked + .slider::before { transform: translateX(20px); }
+
+    /* ── Shortcuts Grid ── */
+    .shortcuts-grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px 12px;
+      align-items: center;
     }
+
+    .shortcut-label {
+      font-size: 12px;
+      color: #bbb;
+    }
+
+    kbd {
+      background: rgba(255,255,255,0.09);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 5px;
+      padding: 2px 9px;
+      font-size: 12px;
+      font-family: 'Inter', 'Segoe UI', monospace;
+      color: #00ff80;
+      font-weight: 700;
+    }
+
+    /* ── Stats Mini ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .stat-card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 8px;
+      padding: 8px;
+      text-align: center;
+    }
+
+    .stat-card .val {
+      font-size: 14px;
+      font-weight: 800;
+      color: #00ff80;
+      text-shadow: 0 0 8px rgba(0,255,100,0.3);
+    }
+
+    .stat-card .lbl {
+      font-size: 9px;
+      color: rgba(255,255,255,0.35);
+      margin-top: 3px;
+    }
+
+    /* ── Status ── */
     .status {
       text-align: center;
       font-size: 11px;
       color: rgba(255,255,255,0.3);
-      padding-top: 6px;
+      padding: 10px 0 12px;
     }
+
     .status .dot {
       display: inline-block;
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: #00ff64;
+      background: #00ff80;
       margin-right: 4px;
       animation: pulse 2s ease-in-out infinite;
     }
+
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.3; }
+    }
+
+    /* ── Site Badge ── */
+    .site-badge {
+      display: inline-block;
+      background: rgba(0,255,100,0.08);
+      border: 1px solid rgba(0,255,100,0.18);
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-size: 10px;
+      color: #00cc66;
+      font-weight: 600;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
   </style>
 </head>
 <body>
   <div class="header">
-    <div class="icon">?</div>
+    <div class="icon">⚡</div>
     <div class="text">
-      <h1>YT Speed Controller</h1>
-      <p>v1.0.1 ? ???????? x1 ??? x16</p>
+      <h1>Speed Controller Turbo</h1>
+      <p>v3.0 — Ad Turbo & Blocker</p>
     </div>
   </div>
 
+  <!-- Current Speed Display -->
+  <div class="speed-display">
+    <div>
+      <div class="label">สปีดปัจจุบัน</div>
+      <div id="currentSite" class="site-badge" style="margin-top:4px">loading...</div>
+    </div>
+    <div class="value" id="currentSpeedDisplay">x1</div>
+  </div>
+
+  <!-- Toggles -->
   <div class="info-box">
-    <h3>Turbo Mode</h3>
+    <h3>การควบคุม</h3>
     <div class="toggle-row">
-      <span class="label">Turbo Mode ??</span>
-      <label class="switch" aria-label="Turbo Mode">
+      <span class="label">⚡ Ad Turbo (x16 Ads)</span>
+      <label class="switch" aria-label="Ad Turbo">
         <input id="turboToggle" type="checkbox" />
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">🛡️ Ad Blocker (7-Layer)</span>
+      <label class="switch" aria-label="Ad Blocker">
+        <input id="adBlockerToggle" type="checkbox" />
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">🪟 Show Floating Panel</span>
+      <label class="switch" aria-label="Show Floating Panel">
+        <input id="showPanelToggle" type="checkbox" />
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">📌 Per-Site Speed</span>
+      <label class="switch" aria-label="Per-Site Speed">
+        <input id="siteSpeedToggle" type="checkbox" />
         <span class="slider"></span>
       </label>
     </div>
   </div>
 
+  <!-- Keyboard Shortcuts -->
   <div class="info-box">
-    <h3>?? Keyboard Shortcuts</h3>
-    <div class="shortcut-row">
-      <span class="label">?????????</span>
-      <kbd>]</kbd>
-    </div>
-    <div class="shortcut-row">
-      <span class="label">??????</span>
-      <kbd>[</kbd>
-    </div>
-    <div class="shortcut-row">
-      <span class="label">?????? x1</span>
-      <kbd>\</kbd>
+    <h3>แป้นพิมพ์ลัด (ตั้งค่าในแผง)</h3>
+    <div class="shortcuts-grid">
+      <span class="shortcut-label">เพิ่มสปีด</span>
+      <kbd id="kbdRaise">]</kbd>
+      <span class="shortcut-label">ลดสปีด</span>
+      <kbd id="kbdLower">[</kbd>
+      <span class="shortcut-label">รีเซ็ต x1</span>
+      <kbd id="kbdReset">\</kbd>
+      <span class="shortcut-label">เปิด/ปิด Turbo</span>
+      <kbd id="kbdTurbo">t</kbd>
     </div>
   </div>
 
+  <!-- Stats -->
   <div class="info-box">
-    <h3>?? ???????</h3>
-    <p style="font-size:11px;color:#aaa;line-height:1.6">
-      ?????????? YouTube ?????????? Panel ??????????????? ?????????????????? Shortcut ??????!
-      ??? Header ????????????????
-    </p>
+    <h3>สถิติ</h3>
+    <div class="stats-grid" style="grid-template-columns: repeat(2, 1fr); gap: 8px;">
+      <div class="stat-card">
+        <div class="val" id="statSaved">0 วิ</div>
+        <div class="lbl">ประหยัดได้</div>
+      </div>
+      <div class="stat-card">
+        <div class="val" id="statTopSpeed">x1</div>
+        <div class="lbl">สปีดสูงสุด</div>
+      </div>
+      <div class="stat-card">
+        <div class="val" id="statVideos">0</div>
+        <div class="lbl">วิดีโอวันนี้</div>
+      </div>
+      <div class="stat-card">
+        <div class="val" id="statBlocked">0</div>
+        <div class="lbl">บล็อกโฆษณา</div>
+      </div>
+    </div>
   </div>
 
   <div class="status">
-    <span class="dot"></span> Active ????????? YouTube
+    <span class="dot"></span> Active — ลาก Panel · Ctrl+Scroll บนวิดีโอ
   </div>
 
-  <script>
-    const turboToggle = document.getElementById('turboToggle');
-
-    function loadTurboState() {
-      chrome.storage.local.get(['yt_turbo'], (result) => {
-        turboToggle.checked = Boolean(result.yt_turbo);
-      });
-    }
-
-    turboToggle.addEventListener('change', () => {
-      chrome.storage.local.set({ yt_turbo: turboToggle.checked });
-    });
-
-    chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== 'local' || !changes.yt_turbo) return;
-      turboToggle.checked = Boolean(changes.yt_turbo.newValue);
-    });
-
-    loadTurboState();
-  </script>
+  <script src="popup.js"></script>
 </body>
 </html>
