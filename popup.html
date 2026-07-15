@@ -247,6 +247,59 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+
+    /* ── Tooltips ── */
+    .info-help {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.55);
+      font-size: 9px;
+      font-weight: 800;
+      cursor: help;
+      margin-left: 6px;
+      vertical-align: middle;
+      transition: all 0.2s ease;
+      position: relative;
+    }
+
+    .info-help:hover {
+      background: rgba(0, 255, 128, 0.2);
+      color: #00ff80;
+    }
+
+    .info-help::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: 140%;
+      left: 50%;
+      transform: translateX(-50%) scale(0.9);
+      background: rgba(10, 10, 18, 0.98);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #e0e0f0;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 10px;
+      font-weight: 400;
+      line-height: 1.4;
+      white-space: pre-line;
+      width: 180px;
+      pointer-events: none;
+      opacity: 0;
+      transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+      z-index: 999;
+      text-align: left;
+    }
+
+    .info-help:hover::after {
+      opacity: 1;
+      transform: translateX(-50%) scale(1);
+    }
   </style>
 </head>
 <body>
@@ -271,28 +324,40 @@
   <div class="info-box">
     <h3>การควบคุม</h3>
     <div class="toggle-row">
-      <span class="label">⚡ Ad Turbo (x16 Ads)</span>
+      <span class="label">
+        ⚡ Ad Turbo (x16 Ads)
+        <span class="info-help" data-tooltip="เร่งความเร็ววิดีโอโฆษณาเป็น x16 และปิดเสียงให้อัตโนมัติ (จะคืนค่าความเร็วและระดับเสียงเดิมเมื่อจบโฆษณา)&#10;⚠️ ข้อควรระวัง: วิดีโอบางตัวอาจโหลดไม่ทันหรือเล่นสะดุดชั่วขณะ">?</span>
+      </span>
       <label class="switch" aria-label="Ad Turbo">
         <input id="turboToggle" type="checkbox" />
         <span class="slider"></span>
       </label>
     </div>
     <div class="toggle-row">
-      <span class="label">🛡️ Ad Blocker (7-Layer)</span>
+      <span class="label">
+        🛡️ Ad Blocker (7-Layer)
+        <span class="info-help" data-tooltip="บล็อกโฆษณาป๊อปอัป, แบนเนอร์ และองค์ประกอบโฆษณาอื่น ๆ บนหน้าเว็บ&#10;⚠️ ข้อควรระวัง: อาจบล็อกผิดพลาดโดนปุ่มหรือเนื้อหาหลักในบางเว็บไซต์ (False Positive)">?</span>
+      </span>
       <label class="switch" aria-label="Ad Blocker">
         <input id="adBlockerToggle" type="checkbox" />
         <span class="slider"></span>
       </label>
     </div>
     <div class="toggle-row">
-      <span class="label">🪟 Show Floating Panel</span>
+      <span class="label">
+        🪟 Show Floating Panel
+        <span class="info-help" data-tooltip="แสดงแผงควบคุมความเร็วแบบลอยบนหน้าเว็บเพื่อความสะดวกในการใช้งานคีย์ลัดและควบคุม&#10;⚠️ ข้อควรระวัง: อาจบดบังปุ่มควบคุมในบางเว็บ สามารถลากเปลี่ยนตำแหน่งได้">?</span>
+      </span>
       <label class="switch" aria-label="Show Floating Panel">
         <input id="showPanelToggle" type="checkbox" />
         <span class="slider"></span>
       </label>
     </div>
     <div class="toggle-row">
-      <span class="label">📌 Per-Site Speed</span>
+      <span class="label">
+        📌 Per-Site Speed
+        <span class="info-help" data-tooltip="จดจำความเร็วที่คุณปรับแยกตามรายเว็บไซต์ (เปิดเว็บเดิมครั้งหน้าความเร็วจะสปีดเท่าเดิม)&#10;⚠️ ข้อควรระวัง: วิดีโออาจเล่นเร็ว/ช้าจากความสับสนว่าเคยตั้งค่าไว้ล่วงหน้า">?</span>
+      </span>
       <label class="switch" aria-label="Per-Site Speed">
         <input id="siteSpeedToggle" type="checkbox" />
         <span class="slider"></span>

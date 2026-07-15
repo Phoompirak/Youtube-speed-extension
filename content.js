@@ -25,7 +25,7 @@
   })();
 
   const DEFAULT_SHORTCUTS = { raise: ']', lower: '[', reset: '\\', turbo: 't' };
-  const AD_BLOCKER_SCAN_INTERVAL = 2000;
+  const AD_BLOCKER_SCAN_INTERVAL = 8000; // ขยายช่วงสแกนแบบ Full Scan เป็น 8 วินาที (ลดการใช้งาน CPU ถี่เกินความจำเป็น)
 
   // ─── Ad Skip & Blocker Keywords ───────────────────────────────────────────
   const DEFAULT_SKIP_KEYWORDS = ['ข้าม', 'ปิด', 'skip', 'close', 'dismiss', 'continue', 'skip ad', 'skip ads', 'ข้ามโฆษณา'];
@@ -66,6 +66,7 @@
   let skipKeywords = [...DEFAULT_SKIP_KEYWORDS];
   let gamblingDomains = [...DEFAULT_GAMBLING_DOMAINS];
   let preAdSpeed = null;             // สปีดก่อนเร่งโฆษณา
+  let preAdMutedStates = new Map();  // สถานะ Mute ก่อนโฆษณาเข้า
   let isCurrentlyInAdTurbo = false;  // กำลังเร่งโฆษณาอยู่หรือไม่
 
   // Panel refs
@@ -194,6 +195,28 @@
     check();
   }
 
+  let cachedVideos = [];
+  let lastVideoScanTime = 0;
+
+  function collectVideosFromRoot(root, found = []) {
+    if (!root || !root.querySelectorAll) return found;
+    root.querySelectorAll('video').forEach((v) => { if (!found.includes(v)) found.push(v); });
+    root.querySelectorAll('*').forEach((el) => {
+      if (el.shadowRoot) collectVideosFromRoot(el.shadowRoot, found);
+    });
+    return found;
+  }
+
+  function getAllVideos() {
+    const now = Date.now();
+    // แคชผลลัพธ์การค้นหาไว้ 3 วินาที เพื่อหลีกเลี่ยงการสแกน recursive DOM แบบถี่ๆ ช่วยลดการกิน CPU
+    if (now - lastVideoScanTime > 3000 || cachedVideos.length === 0) {
+      cachedVideos = collectVideosFromRoot(document);
+      lastVideoScanTime = now;
+    }
+    return cachedVideos;
+  }
+
   function getVideoKey(video) {
     if (!video.__ytSpeedKey) {
       video.__ytSpeedKey = 'yt-speed-' + (++videoIdSeed);
@@ -220,18 +243,6 @@
     return parts.join(' · ');
   }
 
-  function collectVideosFromRoot(root, found = []) {
-    if (!root || !root.querySelectorAll) return found;
-    root.querySelectorAll('video').forEach((v) => { if (!found.includes(v)) found.push(v); });
-    root.querySelectorAll('*').forEach((el) => {
-      if (el.shadowRoot) collectVideosFromRoot(el.shadowRoot, found);
-    });
-    return found;
-  }
-
-  function getAllVideos() {
-    return collectVideosFromRoot(document);
-  }
 
   function clampSpeed(s) {
     return Math.round(Math.min(MAX_SPEED, Math.max(MIN_SPEED, s)) * 100) / 100;
@@ -452,10 +463,11 @@
 
   // Algorithm 1: Z-Index Overlay Detection
   function detectHighZIndexOverlays(root = document) {
-    const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+    // ค้นหาเฉพาะแท็กและ Element ที่มีโอกาสเป็น overlay/banner เพื่อหลีกเลี่ยงการค้นหาแบบหว่านแห '*'
+    const targets = root.querySelectorAll ? root.querySelectorAll('div, a, iframe, img, section, aside, [style*="z-index"]') : [];
     const vpW = window.innerWidth, vpH = window.innerHeight;
     
-    for (const el of all) {
+    for (const el of targets) {
       if (!isSafeToHide(el) || el.getAttribute('data-ad-blocked') === 'true') continue;
       const style = getComputedStyle(el);
       const z = parseInt(style.zIndex) || 0;
@@ -499,10 +511,11 @@
 
   // Algorithm 3 (#5): Transparent Click-hijack Detection (Safe-Zap via pointer-events: none)
   function detectAndNeutralizeClickHijackLayers(root = document) {
-    const all = root.querySelectorAll ? root.querySelectorAll('div, span, a') : [];
+    // ค้นหาเฉพาะ div, span, a ที่มีโอกาสเข้าข่ายเลเยอร์ดักคลิก
+    const targets = root.querySelectorAll ? root.querySelectorAll('div, span, a') : [];
     const vpW = window.innerWidth, vpH = window.innerHeight;
     
-    for (const el of all) {
+    for (const el of targets) {
       if (!isSafeToHide(el) || el.style.pointerEvents === 'none') continue;
       const style = getComputedStyle(el);
       const rect = el.getBoundingClientRect();
@@ -610,30 +623,74 @@
     }
   }
 
-  // Algorithm 7: MutationObserver
+  // Algorithm 7: MutationObserver with Debounced / Batched Scan to prevent CPU spikes & infinite loops
+  let adBlockerDebounceTimer = null;
+  const nodesToScan = new Set();
+
   function watchForInjectedAds() {
-    if (adBlockerObserver) return;
+    if (adBlockerObserver || !isContextValid() || isShutDown) return;
     adBlockerObserver = new MutationObserver((mutations) => {
-      if (!adBlockerEnabled) return;
+      if (!adBlockerEnabled || isShutDown) return;
+      
+      let shouldQueue = false;
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
           if (node.nodeType === 1 && isSafeToHide(node)) {
-            scanAndBlockOverlays(node);
+            // หลีกเลี่ยงการสแกนแผงควบคุมหลักหรือกล่องแสดงผล OSD ของตัวเองเพื่อป้องกัน infinite loops
+            if (node.id === 'yt-speed-panel' || node.closest('#yt-speed-panel') || node.id === 'yt-speed-osd') continue;
+            nodesToScan.add(node);
+            shouldQueue = true;
           }
         }
+      }
+      
+      if (shouldQueue) {
+        if (adBlockerDebounceTimer) clearTimeout(adBlockerDebounceTimer);
+        adBlockerDebounceTimer = setTimeout(() => {
+          if (!isContextValid() || isShutDown) return;
+          
+          // ตัดการเชื่อมต่อชั่วคราวขณะสแกนแก้ไข DOM เพื่อไม่ให้เกิดปฏิกิริยาสะท้อนกลับวนลูปสะสม
+          if (adBlockerObserver) {
+            try { adBlockerObserver.disconnect(); } catch (e) {}
+          }
+          
+          try {
+            for (const node of nodesToScan) {
+              if (node && node.isConnected) {
+                scanAndBlockOverlays(node);
+              }
+            }
+          } catch (e) {}
+          nodesToScan.clear();
+          
+          // ทำการเฝ้าสังเกตการณ์ต่อ
+          if (adBlockerObserver && adBlockerEnabled && !isShutDown) {
+            const targetNode = document.body || document.documentElement;
+            if (targetNode) {
+              try { adBlockerObserver.observe(targetNode, { childList: true, subtree: true }); } catch (e) {}
+            }
+          }
+        }, 500); // ดีบาวน์ 500ms
       }
     });
     const targetNode = document.body || document.documentElement;
     if (targetNode) {
       adBlockerObserver.observe(targetNode, { childList: true, subtree: true });
+      activeObservers.add(adBlockerObserver);
     }
   }
 
   function stopWatchingInjectedAds() {
     if (adBlockerObserver) {
-      adBlockerObserver.disconnect();
+      try { adBlockerObserver.disconnect(); } catch (e) {}
+      activeObservers.delete(adBlockerObserver);
       adBlockerObserver = null;
     }
+    if (adBlockerDebounceTimer) {
+      clearTimeout(adBlockerDebounceTimer);
+      adBlockerDebounceTimer = null;
+    }
+    nodesToScan.clear();
   }
 
   // Master Scanner
@@ -1736,11 +1793,18 @@
         console.log('[Ad Turbo] Ad detected! Speeding up to x16');
       }
 
-      // เร่ง x16
+      // เร่ง x16 + Mute อัตโนมัติ
       videos.forEach((video) => {
         if (isAdVideo(video)) {
           if (video.playbackRate !== TURBO_SPEED) video.playbackRate = TURBO_SPEED;
           if (video.defaultPlaybackRate !== TURBO_SPEED) video.defaultPlaybackRate = TURBO_SPEED;
+          
+          if (!preAdMutedStates.has(video)) {
+            preAdMutedStates.set(video, video.muted);
+          }
+          if (!video.muted) {
+            video.muted = true;
+          }
         }
       });
 
@@ -1748,7 +1812,7 @@
       findAndClickSkipButton();
 
     } else if (isCurrentlyInAdTurbo) {
-      // โฆษณาจบแล้ว → ปรับกลับสปีดเดิม
+      // โฆษณาจบแล้ว → ปรับกลับสปีดเดิม และเปิดเสียงกลับมาเท่าเดิม
       isCurrentlyInAdTurbo = false;
       const restoreSpeed = preAdSpeed || getEffectiveSpeed();
       videos.forEach((video) => {
@@ -1756,9 +1820,16 @@
           video.playbackRate = restoreSpeed;
           video.defaultPlaybackRate = restoreSpeed;
         } catch { /* ignore */ }
+
+        try {
+          if (preAdMutedStates.has(video)) {
+            video.muted = preAdMutedStates.get(video);
+          }
+        } catch { /* ignore */ }
       });
+      preAdMutedStates.clear();
       preAdSpeed = null;
-      console.log(`[Ad Turbo] Ad ended. Restored speed to x${restoreSpeed}`);
+      console.log(`[Ad Turbo] Ad ended. Restored speed to x${restoreSpeed} and restored audio`);
       showOSD(restoreSpeed, 'neutral');
       updateBadge();
     }
