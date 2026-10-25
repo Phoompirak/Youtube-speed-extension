@@ -7,6 +7,12 @@
   // ─── Constants ───────────────────────────────────────────────────────────────
   const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 16];
   const TURBO_SPEED = 16;
+  const AD_RAMP_MIN = 2;
+  const AD_RAMP_MAX = 10;
+  const AD_RAMP_DURATION = 5000;
+  const AD_SKIP_RETRY_INTERVAL = 150;
+  const AD_SKIP_RETRY_DURATION = 15000;
+  const AD_SKIP_CLICK_DELAY = 200;
   const MIN_SPEED = 0.25;
   const MAX_SPEED = 16;
   const VIDEO_SCAN_INTERVAL = 1000;
@@ -68,6 +74,13 @@
   let preAdSpeed = null;             // สปีดก่อนเร่งโฆษณา
   let preAdMutedStates = new Map();  // สถานะ Mute ก่อนโฆษณาเข้า
   let isCurrentlyInAdTurbo = false;  // กำลังเร่งโฆษณาอยู่หรือไม่
+  let adStartedAt = 0;
+  let adRampSpeed = null;
+  let adSkipStartedAt = 0;
+  let adSkipRetryTimer = null;
+  let lastSkipClickAt = 0;
+  let skipClickTimer = null;
+  let adMutationSkipTimer = null;
 
   // Panel refs
   let panel = null;
@@ -128,6 +141,9 @@
       try { obs.disconnect(); } catch (e) {}
     }
     activeObservers.clear();
+    stopAdSkipRetry();
+    if (adMutationSkipTimer) clearTimeout(adMutationSkipTimer);
+    adMutationSkipTimer = null;
     removePanel();
   }
 
@@ -159,7 +175,17 @@
   }
 
   function getTargetSpeed() {
-    return isCurrentlyInAdTurbo ? TURBO_SPEED : getEffectiveSpeed();
+    return isCurrentlyInAdTurbo ? getAdTurboSpeed() : getEffectiveSpeed();
+  }
+
+  function randomAdRampSpeed() {
+    const steps = Math.round((AD_RAMP_MAX - AD_RAMP_MIN) / 0.5);
+    return AD_RAMP_MIN + Math.floor(Math.random() * (steps + 1)) * 0.5;
+  }
+
+  function getAdTurboSpeed() {
+    if (!adStartedAt || !adRampSpeed) return TURBO_SPEED;
+    return Date.now() - adStartedAt < AD_RAMP_DURATION ? adRampSpeed : TURBO_SPEED;
   }
 
   function safeSetStorage(data) {
@@ -259,9 +285,11 @@
     if (adHosts.some(h => host.includes(h))) return true;
 
     // 2. YouTube-specific
-    if (document.querySelector('.ad-showing, .ad-interrupting, .ytp-ad-player-overlay')) {
-      if (document.querySelector('.html5-video-player')?.classList.contains('ad-showing')) return true;
-    }
+    if (document.querySelector(
+      '.html5-video-player.ad-showing, #movie_player.ad-showing, ' +
+      '.ad-showing .html5-video-player, .ad-interrupting, .ytp-ad-player-overlay, ' +
+      '.ytp-ad-module:not(:empty)'
+    )) return true;
 
     // 3. Universal: traverse parent elements
     let curr = video;
@@ -287,7 +315,9 @@
         src.includes('pre-roll') || src.includes('post-roll'))) return true;
 
     // 5. สำหรับเว็บทั่วไปและเว็บดูหนังเถื่อน/สตรีมมิ่ง (หรือ iframe ของ video player ทุกเจ้า) ที่ไม่ใช่ YouTube หรือ Social Media หลัก
-    if (!location.hostname.includes('youtube.com') && !location.hostname.includes('facebook.com') && 
+    if (!location.hostname.includes('youtube.com') && !location.hostname.includes('facebook.com') &&
+        !location.hostname.includes('drive.google.com') && !location.hostname.includes('docs.google.com') &&
+        !location.hostname.includes('googleusercontent.com') &&
         !location.hostname.includes('tiktok.com') && !location.hostname.includes('instagram.com') && 
         !location.hostname.includes('twitter.com') && !location.hostname.includes('x.com')) {
       // วิดีโอความยาวสั้นกว่า 180 วินาที (3 นาที) บนเว็บหนัง/สตรีมมิ่ง/iframe ถือเป็นโฆษณาพรีโรลเสมอ
@@ -348,7 +378,77 @@
     return true;
   }
 
+  function queueSkipClick(el) {
+    if (!el || skipClickTimer) return false;
+    skipClickTimer = setTimeout(() => {
+      skipClickTimer = null;
+      if (!isCurrentlyInAdTurbo || !isVisibleAdControl(el)) return;
+      if (Date.now() - lastSkipClickAt <= 1000) return;
+      lastSkipClickAt = Date.now();
+      clickOrRunJs(el);
+      console.log('[Ad Turbo] Clicked YouTube skip button after 200ms delay');
+    }, AD_SKIP_CLICK_DELAY);
+    return true;
+  }
+
+  function isYouTube() {
+    return /(^|\.)youtube\.com$|(^|\.)youtube-nocookie\.com$/i.test(location.hostname);
+  }
+
+  function isVisibleAdControl(el) {
+    if (!el || !isClickable(el)) return false;
+    const rect = el.getBoundingClientRect();
+    const vw = window.innerWidth || document.documentElement.clientWidth;
+    const vh = window.innerHeight || document.documentElement.clientHeight;
+    return rect.bottom >= 0 && rect.right >= 0 && rect.top <= vh && rect.left <= vw;
+  }
+
+  function getYouTubeSkipCandidates() {
+    const selectors = [
+      '.ytp-ad-skip-button-modern',
+      '.ytp-ad-skip-button',
+      '.ytp-skip-ad-button',
+      '.ytp-ad-skip-button-slot button',
+      '.videoAdUiSkipButton',
+      'button[aria-label*="skip" i]',
+      '[role="button"][aria-label*="skip" i]'
+    ];
+    const candidates = [];
+    for (const selector of selectors) {
+      try {
+        document.querySelectorAll(selector).forEach((el) => {
+          if (!candidates.includes(el)) candidates.push(el);
+        });
+      } catch { /* ignore selector differences between player versions */ }
+    }
+    return candidates;
+  }
+
+  function findYouTubeSkipButton() {
+    const direct = getYouTubeSkipCandidates().find(isVisibleAdControl);
+    if (direct) return direct;
+
+    const fallback = document.querySelectorAll(
+      '#movie_player button, #movie_player [role="button"], .html5-video-player button'
+    );
+    for (const el of fallback) {
+      if (!isVisibleAdControl(el)) continue;
+      const label = [el.textContent, el.getAttribute('aria-label'), el.getAttribute('title')]
+        .filter(Boolean).join(' ').trim().toLowerCase();
+      if (/skip|ข้าม/.test(label)) return el;
+    }
+    return null;
+  }
+
   function findAndClickSkipButton() {
+    if (isYouTube()) {
+      const skipButton = findYouTubeSkipButton();
+      if (skipButton && Date.now() - lastSkipClickAt > 1000) {
+        return queueSkipClick(skipButton);
+      }
+      return false;
+    }
+
     // Strategy 1: CSS Selectors ที่รู้จัก (YouTube, Dailymotion, jwplayer, videojs, iframe embeds ฯลฯ)
     const knownSelectors = [
       '.ytp-ad-skip-button', '.ytp-ad-skip-button-modern',
@@ -400,6 +500,26 @@
     }
 
     return false;
+  }
+
+  function startAdSkipRetry() {
+    if (adSkipRetryTimer) return;
+    adSkipStartedAt = Date.now();
+    const retry = () => {
+      adSkipRetryTimer = null;
+      if (!isCurrentlyInAdTurbo || Date.now() - adSkipStartedAt > AD_SKIP_RETRY_DURATION) return;
+      findAndClickSkipButton();
+      adSkipRetryTimer = setTimeout(retry, AD_SKIP_RETRY_INTERVAL);
+    };
+    retry();
+  }
+
+  function stopAdSkipRetry() {
+    if (adSkipRetryTimer) clearTimeout(adSkipRetryTimer);
+    adSkipRetryTimer = null;
+    adSkipStartedAt = 0;
+    if (skipClickTimer) clearTimeout(skipClickTimer);
+    skipClickTimer = null;
   }
 
   // ─── Ad Overlay Blocker Engine (7 Algorithms) ───────────────────────────────
@@ -728,7 +848,7 @@
     const isAd = isAdVideo(video);
     // เร่ง x16 เฉพาะโฆษณาเมื่อ Ad Turbo เปิด
     const shouldTurbo = isAd && adTurboEnabled;
-    const targetSpeed = shouldTurbo ? TURBO_SPEED : getEffectiveSpeed();
+    const targetSpeed = shouldTurbo ? getAdTurboSpeed() : getEffectiveSpeed();
     try {
       if (video.defaultPlaybackRate !== targetSpeed) video.defaultPlaybackRate = targetSpeed;
       if (video.playbackRate !== targetSpeed) video.playbackRate = targetSpeed;
@@ -739,10 +859,29 @@
   }
 
   function applyCurrentSpeed() {
-    const videos = getAllVideos();
+    const videos = getControlVideos();
     if (!videos.length) return;
     videos.forEach((v) => applyVideoSpeed(v));
     updateBadge();
+  }
+
+  function getControlVideos() {
+    const videos = getAllVideos();
+    if (videos.length <= 1) return videos;
+
+    const active = videos.filter((video) => {
+      const rect = video.getBoundingClientRect();
+      const style = getComputedStyle(video);
+      const visible = rect.width > 0 && rect.height > 0 &&
+        style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+      return visible && !isAdVideo(video);
+    });
+    const playing = active.filter((video) => !video.paused && !video.ended);
+    if (playing.length) return playing;
+    if (active.length) return [active.sort((a, b) =>
+      (b.getBoundingClientRect().width * b.getBoundingClientRect().height) -
+      (a.getBoundingClientRect().width * a.getBoundingClientRect().height))[0]];
+    return videos;
   }
 
   function updateBadge() {
@@ -818,6 +957,7 @@
 
     syncSpeedUI();
     applyCurrentSpeed();
+    broadcastSpeedToFrames(clamped);
     showOSD(clamped, direction);
 
     // Stats: count new video if first speed change
@@ -829,6 +969,19 @@
     stats.todayVideos++;
     safeSetStorage({ yt_stats: stats });
     updateStatsUI();
+  }
+
+  function broadcastSpeedToFrames(speed) {
+    if (!IS_TOP_FRAME) return;
+    document.querySelectorAll('iframe').forEach((frame) => {
+      try {
+        frame.contentWindow?.postMessage({
+          source: 'speed-controller-turbo',
+          type: 'SET_SPEED',
+          speed,
+        }, '*');
+      } catch { /* cross-origin frames may disappear during navigation */ }
+    });
   }
 
   function syncSpeedUI() {
@@ -1206,8 +1359,9 @@
         if (!isContextValid() || isShutDown || chrome.runtime.lastError) return;
         if (result && result.yt_panel_pos) {
           const { x, y } = result.yt_panel_pos;
-          panel.style.left = x + 'px';
-          panel.style.top = y + 'px';
+          const safePos = clampPanelPos(Number(x) || 16, Number(y) || 16);
+          panel.style.left = safePos.x + 'px';
+          panel.style.top = safePos.y + 'px';
           panel.style.right = 'auto';
         }
       });
@@ -1219,6 +1373,14 @@
     syncAdTurboUI();
     updateSiteSpeedLabel();
   }
+
+  window.addEventListener('resize', () => {
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    const safePos = clampPanelPos(rect.left, rect.top);
+    panel.style.left = safePos.x + 'px';
+    panel.style.top = safePos.y + 'px';
+  });
 
   function switchTab(id) {
     activeTab = id;
@@ -1766,9 +1928,49 @@
     }
   }
 
+  // ─── Popup / iframe command bridge ──────────────────────────────────────────
+  if (isContextValid()) {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!message || isShutDown) return;
+      if (message.type === 'SET_SPEED' && Number.isFinite(Number(message.speed))) {
+        setSpeed(Number(message.speed), 'neutral');
+        sendResponse({ ok: true, speed: getEffectiveSpeed() });
+        return true;
+      }
+      if (message.type === 'GET_SPEED') {
+        sendResponse({ ok: true, speed: getEffectiveSpeed(), site: CURRENT_SITE });
+        return true;
+      }
+    });
+  }
+
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || data.source !== 'speed-controller-turbo') return;
+    if (data.type === 'SET_SPEED' && !IS_TOP_FRAME && Number.isFinite(Number(data.speed))) {
+      setSpeed(Number(data.speed), 'neutral');
+    }
+  });
+
+  function reportFrameVideo() {
+    if (IS_TOP_FRAME || !getAllVideos().length) return;
+    try {
+      window.top.postMessage({ source: 'speed-controller-turbo', type: 'FRAME_VIDEO_AVAILABLE' }, '*');
+    } catch { /* ignore inaccessible/disposed parent frames */ }
+  }
+
+  if (IS_TOP_FRAME) {
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (!data || data.source !== 'speed-controller-turbo' || data.type !== 'FRAME_VIDEO_AVAILABLE') return;
+      if (isStateLoaded && showPanel && isSiteAllowed()) createPanel();
+    });
+  }
+
   // ─── Intervals ───────────────────────────────────────────────────────────────
   registerInterval(() => {
     tagVideos();
+    reportFrameVideo();
     if (!panel && getAllVideos().length && canShowFloatingPanel()) createPanel();
   }, VIDEO_SCAN_INTERVAL);
 
@@ -1790,14 +1992,18 @@
       if (!isCurrentlyInAdTurbo) {
         preAdSpeed = getEffectiveSpeed();
         isCurrentlyInAdTurbo = true;
-        console.log('[Ad Turbo] Ad detected! Speeding up to x16');
+        adStartedAt = Date.now();
+        adRampSpeed = randomAdRampSpeed();
+        startAdSkipRetry();
+        console.log(`[Ad Turbo] Ad detected! Ramp x${adRampSpeed} for 5s, then x16`);
       }
 
       // เร่ง x16 + Mute อัตโนมัติ
       videos.forEach((video) => {
         if (isAdVideo(video)) {
-          if (video.playbackRate !== TURBO_SPEED) video.playbackRate = TURBO_SPEED;
-          if (video.defaultPlaybackRate !== TURBO_SPEED) video.defaultPlaybackRate = TURBO_SPEED;
+          const adSpeed = getAdTurboSpeed();
+          if (video.playbackRate !== adSpeed) video.playbackRate = adSpeed;
+          if (video.defaultPlaybackRate !== adSpeed) video.defaultPlaybackRate = adSpeed;
           
           if (!preAdMutedStates.has(video)) {
             preAdMutedStates.set(video, video.muted);
@@ -1814,6 +2020,7 @@
     } else if (isCurrentlyInAdTurbo) {
       // โฆษณาจบแล้ว → ปรับกลับสปีดเดิม และเปิดเสียงกลับมาเท่าเดิม
       isCurrentlyInAdTurbo = false;
+      stopAdSkipRetry();
       const restoreSpeed = preAdSpeed || getEffectiveSpeed();
       videos.forEach((video) => {
         try {
@@ -1829,6 +2036,8 @@
       });
       preAdMutedStates.clear();
       preAdSpeed = null;
+      adStartedAt = 0;
+      adRampSpeed = null;
       console.log(`[Ad Turbo] Ad ended. Restored speed to x${restoreSpeed} and restored audio`);
       showOSD(restoreSpeed, 'neutral');
       updateBadge();
@@ -1886,9 +2095,17 @@
     }
     if (location.href !== lastUrl) {
       lastUrl = location.href;
+      cachedVideos = [];
+      lastVideoScanTime = 0;
       waitForVideo(() => {
         applyCurrentSpeed();
       });
+    }
+    if (isCurrentlyInAdTurbo && isYouTube() && !adMutationSkipTimer) {
+      adMutationSkipTimer = setTimeout(() => {
+        adMutationSkipTimer = null;
+        findAndClickSkipButton();
+      }, 60);
     }
   });
   const targetNode = document.body || document.documentElement;

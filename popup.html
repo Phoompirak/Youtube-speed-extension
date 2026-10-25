@@ -68,6 +68,50 @@
       letter-spacing: 0.5px;
     }
 
+    .speed-control {
+      padding: 12px 18px 4px;
+      background: rgba(0,255,100,0.025);
+    }
+
+    .speed-control input[type="range"] {
+      width: 100%;
+      accent-color: #00e889;
+      cursor: pointer;
+    }
+
+    .speed-actions {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      padding: 8px 18px 14px;
+      background: rgba(0,255,100,0.025);
+    }
+
+    .speed-actions button {
+      border: 1px solid rgba(0,255,128,0.18);
+      border-radius: 7px;
+      padding: 6px 2px;
+      background: rgba(0,255,128,0.06);
+      color: #a8ffd4;
+      cursor: pointer;
+      font: 700 11px 'Inter', 'Segoe UI', sans-serif;
+      transition: .18s ease;
+    }
+
+    .speed-actions button:hover,
+    .speed-actions button:focus-visible {
+      color: #06140d;
+      background: #00e889;
+      outline: none;
+      transform: translateY(-1px);
+    }
+
+    .speed-actions button.active {
+      color: #06140d;
+      background: #00e889;
+      box-shadow: 0 0 12px rgba(0,232,137,.25);
+    }
+
     /* ── Info Boxes ── */
     .info-box {
       margin: 10px 14px 0;
@@ -318,6 +362,20 @@
       <div id="currentSite" class="site-badge" style="margin-top:4px">loading...</div>
     </div>
     <div class="value" id="currentSpeedDisplay">x1</div>
+  </div>
+
+  <div class="speed-control" aria-label="ปรับความเร็ววิดีโอ">
+    <input id="speedRange" type="range" min="0.25" max="16" step="0.25" value="1" />
+  </div>
+  <div class="speed-actions">
+    <button type="button" data-speed="1">x1</button>
+    <button type="button" data-speed="1.5">x1.5</button>
+    <button type="button" data-speed="2">x2</button>
+    <button type="button" data-speed="3">x3</button>
+    <button type="button" data-speed="4">x4</button>
+    <button type="button" data-speed="6">x6</button>
+    <button type="button" data-speed="8">x8</button>
+    <button type="button" data-speed="16">x16</button>
   </div>
 
   <!-- Toggles -->

@@ -4,6 +4,8 @@ const turboToggle       = document.getElementById('turboToggle');
 const adBlockerToggle   = document.getElementById('adBlockerToggle');
 const showPanelToggle   = document.getElementById('showPanelToggle');
 const siteSpeedToggle   = document.getElementById('siteSpeedToggle');
+const speedRange        = document.getElementById('speedRange');
+const speedButtons       = document.querySelectorAll('[data-speed]');
 
 const currentSpeedDisplay = document.getElementById('currentSpeedDisplay');
 const currentSiteEl       = document.getElementById('currentSite');
@@ -18,7 +20,9 @@ const statTopSpeed = document.getElementById('statTopSpeed');
 const statVideos   = document.getElementById('statVideos');
 const statBlocked  = document.getElementById('statBlocked');
 
-const KEYS = ['yt_ad_turbo', 'yt_ad_blocker', 'yt_show_panel', 'yt_use_site_speed', 'yt_speed', 'yt_shortcuts', 'yt_stats', 'yt_ad_blocker_stats'];
+const KEYS = ['yt_ad_turbo', 'yt_ad_blocker', 'yt_show_panel', 'yt_use_site_speed', 'yt_speed', 'yt_site_speeds', 'yt_shortcuts', 'yt_stats', 'yt_ad_blocker_stats'];
+let activeTabId = null;
+let activeSite = '';
 
 function formatTime(seconds) {
   if (seconds < 60) return Math.round(seconds) + ' วิ';
@@ -33,8 +37,11 @@ function load() {
     showPanelToggle.checked = result.yt_show_panel !== false;
     siteSpeedToggle.checked = Boolean(result.yt_use_site_speed);
 
-    const spd = typeof result.yt_speed === 'number' ? result.yt_speed : 1;
-    currentSpeedDisplay.textContent = 'x' + spd;
+    const storedSpeed = typeof result.yt_speed === 'number' ? result.yt_speed : 1;
+    const siteMap = result.yt_site_speeds || {};
+    const spd = result.yt_use_site_speed && activeSite && typeof siteMap[activeSite] === 'number'
+      ? siteMap[activeSite] : storedSpeed;
+    updateSpeedUI(spd);
 
     const sc = result.yt_shortcuts || {};
     kbdRaise.textContent = sc.raise || ']';
@@ -57,16 +64,51 @@ function load() {
 
   // Get active tab URL
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs[0]) activeTabId = tabs[0].id;
     if (tabs[0] && tabs[0].url) {
       try {
         const url = new URL(tabs[0].url);
-        currentSiteEl.textContent = url.hostname.replace(/^www\./, '');
+        activeSite = url.hostname.replace(/^www\./, '');
+        currentSiteEl.textContent = activeSite;
       } catch {
         currentSiteEl.textContent = 'unknown';
       }
     }
+    if (activeTabId !== null) {
+      chrome.tabs.sendMessage(activeTabId, { type: 'GET_SPEED' }, (response) => {
+        if (!chrome.runtime.lastError || response?.ok) updateSpeedUI(response?.speed || 1);
+      });
+    }
   });
 }
+
+function updateSpeedUI(speed) {
+  const safe = Math.min(16, Math.max(0.25, Number(speed) || 1));
+  currentSpeedDisplay.textContent = 'x' + safe;
+  if (speedRange) speedRange.value = safe;
+  speedButtons.forEach((button) => {
+    button.classList.toggle('active', Number(button.dataset.speed) === safe);
+  });
+}
+
+function setSpeedFromPopup(speed) {
+  const safe = Math.round(Math.min(16, Math.max(0.25, Number(speed) || 1)) * 100) / 100;
+  updateSpeedUI(safe);
+  if (activeTabId !== null) {
+    chrome.tabs.sendMessage(activeTabId, { type: 'SET_SPEED', speed: safe }, (response) => {
+      if (chrome.runtime.lastError || !response?.ok) {
+        chrome.storage.local.set({ yt_speed: safe });
+      }
+    });
+  } else {
+    chrome.storage.local.set({ yt_speed: safe });
+  }
+}
+
+if (speedRange) speedRange.addEventListener('input', () => setSpeedFromPopup(speedRange.value));
+speedButtons.forEach((button) => {
+  button.addEventListener('click', () => setSpeedFromPopup(button.dataset.speed));
+});
 
 turboToggle.addEventListener('change', () => {
   chrome.storage.local.set({ yt_ad_turbo: turboToggle.checked });
@@ -93,7 +135,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (changes.yt_show_panel)   showPanelToggle.checked = changes.yt_show_panel.newValue !== false;
   if (changes.yt_use_site_speed) siteSpeedToggle.checked = Boolean(changes.yt_use_site_speed.newValue);
   if (changes.yt_speed) {
-    currentSpeedDisplay.textContent = 'x' + (changes.yt_speed.newValue || 1);
+    updateSpeedUI(changes.yt_speed.newValue || 1);
   }
   if (changes.yt_shortcuts) {
     const sc = changes.yt_shortcuts.newValue || {};
