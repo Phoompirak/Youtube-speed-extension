@@ -1433,6 +1433,18 @@
     next: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4" fill="currentColor"/><line x1="19" y1="5" x2="19" y2="19"/></svg>',
   };
 
+  const UI_ICONS = {
+    zap: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+    shield: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+    sliders: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/></svg>',
+    barChart: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
+    settings: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+    trash: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    clock: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+    award: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+    play: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><polygon points="5 3 19 12 5 21 5 3"/></svg>',
+  };
+
   function showOSD(speed, direction, customText = null) {
     const root = ensureShadowRoot();
     if (!root) return;
@@ -1606,14 +1618,14 @@
   function syncAdTurboUI() {
     if (!adTurboBtn) return;
     adTurboBtn.classList.toggle('active', adTurboEnabled);
-    adTurboBtn.textContent = adTurboEnabled ? '⚡ Ad Turbo: ON' : '⚡ Ad Turbo: OFF';
+    adTurboBtn.innerHTML = `<span style="display:inline-flex;align-items:center;gap:6px">${UI_ICONS.zap}<span>Ad Turbo</span></span><span>${adTurboEnabled ? 'ON' : 'OFF'}</span>`;
   }
 
   function syncAdBlockerUI() {
     if (!adBlockerBtn) return;
     adBlockerBtn.classList.toggle('active', adBlockerEnabled);
     const blockedCount = adBlockerStats.session || 0;
-    adBlockerBtn.textContent = adBlockerEnabled ? `🛡️ Ad Blocker: ON (${blockedCount})` : '🛡️ Ad Blocker: OFF';
+    adBlockerBtn.innerHTML = `<span style="display:inline-flex;align-items:center;gap:6px">${UI_ICONS.shield}<span>Ad Blocker</span></span><span>${adBlockerEnabled ? `ON (${blockedCount})` : 'OFF'}</span>`;
   }
 
   // ─── Video Inspector ─────────────────────────────────────────────────────────
@@ -1645,9 +1657,9 @@
   function updateStatsUI() {
     if (!statsContainerEl) return;
     statsContainerEl.innerHTML = `
-      <div class="sc-stat-row"><span class="sc-stat-label">⏱ ประหยัดเวลา</span><span class="sc-stat-val">${formatTime(stats.savedSeconds)}</span></div>
-      <div class="sc-stat-row"><span class="sc-stat-label">🏆 สปีดสูงสุด</span><span class="sc-stat-val">x${stats.topSpeed}</span></div>
-      <div class="sc-stat-row"><span class="sc-stat-label">📺 วิดีโอวันนี้</span><span class="sc-stat-val">${stats.todayVideos}</span></div>
+      <div class="sc-stat-row"><span class="sc-stat-label" style="display:inline-flex;align-items:center;gap:5px">${UI_ICONS.clock}ประหยัดเวลา</span><span class="sc-stat-val">${formatTime(stats.savedSeconds)}</span></div>
+      <div class="sc-stat-row"><span class="sc-stat-label" style="display:inline-flex;align-items:center;gap:5px">${UI_ICONS.award}สปีดสูงสุด</span><span class="sc-stat-val">x${stats.topSpeed}</span></div>
+      <div class="sc-stat-row"><span class="sc-stat-label" style="display:inline-flex;align-items:center;gap:5px">${UI_ICONS.play}วิดีโอวันนี้</span><span class="sc-stat-val">${stats.todayVideos}</span></div>
     `;
   }
 
@@ -1734,16 +1746,20 @@
     const tabBar = document.createElement('div');
     tabBar.className = 'sc-tab-bar';
     const tabs = [
-      { id: 'speed', label: '🎛️ Speed' },
-      { id: 'presets', label: '⚡ Presets' },
-      { id: 'stats', label: '📊 Stats' },
-      { id: 'settings', label: '⚙️' },
+      { id: 'speed', html: `${UI_ICONS.sliders}<span>Speed</span>` },
+      { id: 'presets', html: `${UI_ICONS.zap}<span>Presets</span>` },
+      { id: 'stats', html: `${UI_ICONS.barChart}<span>Stats</span>` },
+      { id: 'settings', html: UI_ICONS.settings },
     ];
-    tabs.forEach(({ id, label }) => {
+    tabs.forEach(({ id, html }) => {
       const btn = document.createElement('button');
       btn.className = 'sc-tab-btn' + (id === activeTab ? ' active' : '');
       btn.dataset.tab = id;
-      btn.textContent = label;
+      btn.style.display = 'inline-flex';
+      btn.style.alignItems = 'center';
+      btn.style.justifyContent = 'center';
+      btn.style.gap = '4px';
+      btn.innerHTML = html;
       btn.addEventListener('click', () => switchTab(id));
       tabBar.appendChild(btn);
     });
@@ -1866,7 +1882,11 @@
 
     const resetStatsBtn = document.createElement('button');
     resetStatsBtn.className = 'sc-settings-btn danger';
-    resetStatsBtn.textContent = '🗑 รีเซ็ตสถิติ';
+    resetStatsBtn.style.display = 'inline-flex';
+    resetStatsBtn.style.alignItems = 'center';
+    resetStatsBtn.style.justifyContent = 'center';
+    resetStatsBtn.style.gap = '5px';
+    resetStatsBtn.innerHTML = `${UI_ICONS.trash}<span>รีเซ็ตสถิติ</span>`;
     resetStatsBtn.addEventListener('click', () => {
       stats = { savedSeconds: 0, topSpeed: 1, todayVideos: 0, lastDate: new Date().toDateString() };
       safeSetStorage({ yt_stats: stats });
@@ -2114,7 +2134,11 @@
 
     const clearSiteBtn = document.createElement('button');
     clearSiteBtn.className = 'sc-settings-btn';
-    clearSiteBtn.textContent = `🗑 ลบสปีดของ ${CURRENT_SITE}`;
+    clearSiteBtn.style.display = 'inline-flex';
+    clearSiteBtn.style.alignItems = 'center';
+    clearSiteBtn.style.justifyContent = 'center';
+    clearSiteBtn.style.gap = '5px';
+    clearSiteBtn.innerHTML = `${UI_ICONS.trash}<span>ลบสปีดของ ${CURRENT_SITE}</span>`;
     clearSiteBtn.addEventListener('click', () => {
       delete siteSpeedMap[CURRENT_SITE];
       safeSetStorage({ yt_site_speeds: siteSpeedMap });
@@ -2149,7 +2173,7 @@
     themeLabel.textContent = 'Theme';
     const themeSel = document.createElement('select');
     themeSel.className = 'sc-select';
-    [['dark', '🌙 Dark'], ['light', '☀️ Light'], ['auto', '🔄 Auto']].forEach(([val, lbl]) => {
+    [['dark', 'Dark'], ['light', 'Light'], ['auto', 'Auto']].forEach(([val, lbl]) => {
       const opt = document.createElement('option');
       opt.value = val;
       opt.textContent = lbl;
@@ -2268,7 +2292,7 @@
 
     const addBlackBtn = document.createElement('button');
     addBlackBtn.className = 'sc-settings-btn';
-    addBlackBtn.textContent = '🚫 Block เว็บนี้';
+    addBlackBtn.textContent = 'Block เว็บนี้';
     addBlackBtn.addEventListener('click', () => {
       if (!blacklist.includes(CURRENT_SITE)) {
         blacklist.push(CURRENT_SITE);
@@ -2279,7 +2303,7 @@
 
     const addWhiteBtn = document.createElement('button');
     addWhiteBtn.className = 'sc-settings-btn';
-    addWhiteBtn.textContent = '✅ Allow เว็บนี้';
+    addWhiteBtn.textContent = 'Allow เว็บนี้';
     addWhiteBtn.addEventListener('click', () => {
       if (!whitelist.includes(CURRENT_SITE)) {
         whitelist.push(CURRENT_SITE);
