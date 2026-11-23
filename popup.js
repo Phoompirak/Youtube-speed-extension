@@ -4,7 +4,11 @@ const turboToggle       = document.getElementById('turboToggle');
 const adBlockerToggle   = document.getElementById('adBlockerToggle');
 const showPanelToggle   = document.getElementById('showPanelToggle');
 const siteSpeedToggle   = document.getElementById('siteSpeedToggle');
+const autoNextToggle    = document.getElementById('autoNextToggle');
 const speedRange        = document.getElementById('speedRange');
+const speedMinusBtn     = document.getElementById('speedMinusBtn');
+const speedResetBtn     = document.getElementById('speedResetBtn');
+const speedPlusBtn      = document.getElementById('speedPlusBtn');
 const speedButtons       = document.querySelectorAll('[data-speed]');
 
 const currentSpeedDisplay = document.getElementById('currentSpeedDisplay');
@@ -20,9 +24,22 @@ const statTopSpeed = document.getElementById('statTopSpeed');
 const statVideos   = document.getElementById('statVideos');
 const statBlocked  = document.getElementById('statBlocked');
 
-const KEYS = ['yt_ad_turbo', 'yt_ad_blocker', 'yt_show_panel', 'yt_use_site_speed', 'yt_speed', 'yt_site_speeds', 'yt_shortcuts', 'yt_stats', 'yt_ad_blocker_stats'];
+const KEYS = ['yt_ad_turbo', 'yt_ad_blocker', 'yt_show_panel', 'yt_use_site_speed', 'yt_auto_next', 'yt_speed', 'yt_site_speeds', 'yt_shortcuts', 'yt_stats', 'yt_ad_blocker_stats'];
 let activeTabId = null;
 let activeSite = '';
+let useSiteSpeed = true;
+let siteSpeedMap = {};
+let globalSpeed = 1;
+let displayedSpeed = 1;
+
+function getDisplayedSpeed() {
+  if (useSiteSpeed) {
+    return activeSite && typeof siteSpeedMap[activeSite] === 'number'
+      ? siteSpeedMap[activeSite]
+      : 1;
+  }
+  return globalSpeed;
+}
 
 function formatTime(seconds) {
   if (seconds < 60) return Math.round(seconds) + ' วิ';
@@ -35,13 +52,13 @@ function load() {
     turboToggle.checked     = result.yt_ad_turbo !== false;
     if (adBlockerToggle) adBlockerToggle.checked = Boolean(result.yt_ad_blocker);
     showPanelToggle.checked = result.yt_show_panel !== false;
-    siteSpeedToggle.checked = Boolean(result.yt_use_site_speed);
+    useSiteSpeed            = result.yt_use_site_speed !== false;
+    siteSpeedToggle.checked = useSiteSpeed;
+    if (autoNextToggle) autoNextToggle.checked = Boolean(result.yt_auto_next);
 
-    const storedSpeed = typeof result.yt_speed === 'number' ? result.yt_speed : 1;
-    const siteMap = result.yt_site_speeds || {};
-    const spd = result.yt_use_site_speed && activeSite && typeof siteMap[activeSite] === 'number'
-      ? siteMap[activeSite] : storedSpeed;
-    updateSpeedUI(spd);
+    globalSpeed  = typeof result.yt_speed === 'number' ? result.yt_speed : 1;
+    siteSpeedMap = result.yt_site_speeds && typeof result.yt_site_speeds === 'object' ? result.yt_site_speeds : {};
+    updateSpeedUI(getDisplayedSpeed());
 
     const sc = result.yt_shortcuts || {};
     kbdRaise.textContent = sc.raise || ']';
@@ -62,33 +79,59 @@ function load() {
     }
   });
 
-  // Get active tab URL
+  // Get active tab URL & site
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (tabs[0]) activeTabId = tabs[0].id;
     if (tabs[0] && tabs[0].url) {
       try {
         const url = new URL(tabs[0].url);
-        activeSite = url.hostname.replace(/^www\./, '');
-        currentSiteEl.textContent = activeSite;
+        if (url.protocol === 'http:' || url.protocol === 'https:') {
+          activeSite = url.hostname.replace(/^www\./, '');
+          currentSiteEl.textContent = activeSite;
+          updateSpeedUI(getDisplayedSpeed());
+        } else {
+          currentSiteEl.textContent = url.protocol.replace(':', '');
+        }
       } catch {
-        currentSiteEl.textContent = 'unknown';
+        currentSiteEl.textContent = '—';
       }
     }
     if (activeTabId !== null) {
       chrome.tabs.sendMessage(activeTabId, { type: 'GET_SPEED' }, (response) => {
-        if (!chrome.runtime.lastError || response?.ok) updateSpeedUI(response?.speed || 1);
+        if (!chrome.runtime.lastError && response?.ok) {
+          if (response.site) {
+            activeSite = response.site;
+            currentSiteEl.textContent = activeSite;
+          }
+          updateSpeedUI(response.speed || 1);
+        } else if (!activeSite && currentSiteEl.textContent === 'loading...') {
+          currentSiteEl.textContent = '—';
+        }
       });
+    } else if (currentSiteEl.textContent === 'loading...') {
+      currentSiteEl.textContent = '—';
     }
   });
 }
 
 function updateSpeedUI(speed) {
-  const safe = Math.min(16, Math.max(0.25, Number(speed) || 1));
+  const safe = Math.round(Math.min(16, Math.max(0.25, Number(speed) || 1)) * 100) / 100;
+  displayedSpeed = safe;
   currentSpeedDisplay.textContent = 'x' + safe;
   if (speedRange) speedRange.value = safe;
   speedButtons.forEach((button) => {
     button.classList.toggle('active', Number(button.dataset.speed) === safe);
   });
+}
+
+function saveSpeedFallback(safe) {
+  if (useSiteSpeed && activeSite) {
+    siteSpeedMap = { ...siteSpeedMap, [activeSite]: safe };
+    chrome.storage.local.set({ yt_site_speeds: siteSpeedMap });
+  } else {
+    globalSpeed = safe;
+    chrome.storage.local.set({ yt_speed: safe });
+  }
 }
 
 function setSpeedFromPopup(speed) {
@@ -97,15 +140,18 @@ function setSpeedFromPopup(speed) {
   if (activeTabId !== null) {
     chrome.tabs.sendMessage(activeTabId, { type: 'SET_SPEED', speed: safe }, (response) => {
       if (chrome.runtime.lastError || !response?.ok) {
-        chrome.storage.local.set({ yt_speed: safe });
+        saveSpeedFallback(safe);
       }
     });
   } else {
-    chrome.storage.local.set({ yt_speed: safe });
+    saveSpeedFallback(safe);
   }
 }
 
 if (speedRange) speedRange.addEventListener('input', () => setSpeedFromPopup(speedRange.value));
+if (speedMinusBtn) speedMinusBtn.addEventListener('click', () => setSpeedFromPopup(displayedSpeed - 0.25));
+if (speedResetBtn) speedResetBtn.addEventListener('click', () => setSpeedFromPopup(1));
+if (speedPlusBtn) speedPlusBtn.addEventListener('click', () => setSpeedFromPopup(displayedSpeed + 0.25));
 speedButtons.forEach((button) => {
   button.addEventListener('click', () => setSpeedFromPopup(button.dataset.speed));
 });
@@ -125,17 +171,35 @@ showPanelToggle.addEventListener('change', () => {
 });
 
 siteSpeedToggle.addEventListener('change', () => {
-  chrome.storage.local.set({ yt_use_site_speed: siteSpeedToggle.checked });
+  useSiteSpeed = siteSpeedToggle.checked;
+  chrome.storage.local.set({ yt_use_site_speed: useSiteSpeed });
+  updateSpeedUI(getDisplayedSpeed());
 });
+
+if (autoNextToggle) {
+  autoNextToggle.addEventListener('change', () => {
+    chrome.storage.local.set({ yt_auto_next: autoNextToggle.checked });
+  });
+}
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
   if (changes.yt_ad_turbo)     turboToggle.checked = changes.yt_ad_turbo.newValue !== false;
   if (changes.yt_ad_blocker && adBlockerToggle) adBlockerToggle.checked = Boolean(changes.yt_ad_blocker.newValue);
   if (changes.yt_show_panel)   showPanelToggle.checked = changes.yt_show_panel.newValue !== false;
-  if (changes.yt_use_site_speed) siteSpeedToggle.checked = Boolean(changes.yt_use_site_speed.newValue);
+  if (changes.yt_auto_next && autoNextToggle) autoNextToggle.checked = Boolean(changes.yt_auto_next.newValue);
+  if (changes.yt_use_site_speed) {
+    useSiteSpeed = changes.yt_use_site_speed.newValue !== false;
+    siteSpeedToggle.checked = useSiteSpeed;
+    updateSpeedUI(getDisplayedSpeed());
+  }
+  if (changes.yt_site_speeds) {
+    siteSpeedMap = changes.yt_site_speeds.newValue || {};
+    if (useSiteSpeed) updateSpeedUI(getDisplayedSpeed());
+  }
   if (changes.yt_speed) {
-    updateSpeedUI(changes.yt_speed.newValue || 1);
+    globalSpeed = changes.yt_speed.newValue || 1;
+    if (!useSiteSpeed) updateSpeedUI(globalSpeed);
   }
   if (changes.yt_shortcuts) {
     const sc = changes.yt_shortcuts.newValue || {};

@@ -16,11 +16,11 @@
   const MIN_SPEED = 0.25;
   const MAX_SPEED = 16;
   const VIDEO_SCAN_INTERVAL = 1000;
-  const SPEED_SYNC_INTERVAL = 2000;
+  const SPEED_SYNC_INTERVAL = 500;
   const AD_SYNC_INTERVAL = 500;
   const TURBO_LIST_SCAN_INTERVAL = 1500;
   const STATS_SAVE_INTERVAL = 10000;
-  const OSD_DURATION = 1500;
+  const OSD_DURATION = 950;
   const CURRENT_SITE = location.hostname.replace(/^www\./, '');
   const IS_TOP_FRAME = (() => {
     try {
@@ -49,19 +49,22 @@
     'yt_panel_pos', 'yt_opacity', 'yt_theme', 'yt_site_speeds',
     'yt_shortcuts', 'yt_stats', 'yt_presets', 'yt_blacklist', 'yt_whitelist',
     'yt_use_site_speed', 'yt_list_mode', 'yt_skip_keywords',
-    'yt_ad_blocker', 'yt_gambling_domains', 'yt_ad_blocker_stats'
+    'yt_ad_blocker', 'yt_gambling_domains', 'yt_ad_blocker_stats',
+    'yt_auto_next'
   ];
 
   // ─── State ───────────────────────────────────────────────────────────────────
   let currentSpeed = 1;
   let adTurboEnabled = true;        // เปิด/ปิด Ad Turbo
   let adBlockerEnabled = false;     // เปิด/ปิด Ad Blocker (ค่าเริ่มต้นปิด ป้องกัน false positive)
+  let autoNextEnabled = false;      // เปิด/ปิด Auto Next Lesson (คลิก "ต้องการเรียนบทถัดไป" อัตโนมัติ)
   let showPanel = true;
   let isStateLoaded = false;
   let panelOpacity = 92;
   let currentTheme = 'dark'; // 'dark' | 'light' | 'auto'
   let siteSpeedMap = {};
-  let useSiteSpeed = false;
+  let useSiteSpeed = true;
+  let frameOverrideSpeed = null;
   let shortcuts = { ...DEFAULT_SHORTCUTS };
   let stats = { savedSeconds: 0, topSpeed: 1, todayVideos: 0, lastDate: '' };
   let adBlockerStats = { blocked: 0, session: 0 };
@@ -71,9 +74,10 @@
   let listMode = 'none'; // 'none' | 'blacklist' | 'whitelist'
   let skipKeywords = [...DEFAULT_SKIP_KEYWORDS];
   let gamblingDomains = [...DEFAULT_GAMBLING_DOMAINS];
-  let preAdSpeed = null;             // สปีดก่อนเร่งโฆษณา
-  let preAdMutedStates = new Map();  // สถานะ Mute ก่อนโฆษณาเข้า
-  let isCurrentlyInAdTurbo = false;  // กำลังเร่งโฆษณาอยู่หรือไม่
+  let preAdSpeed = null;                  // สปีดก่อนเร่งโฆษณา
+  let preAdMutedStates = new WeakMap();   // สถานะ Mute ก่อนโฆษณาเข้า (WeakMap กัน memory leak)
+  let preAdVolumeStates = new WeakMap();  // ระดับเสียงก่อนโฆษณาเข้า (WeakMap กัน memory leak)
+  let isCurrentlyInAdTurbo = false;       // กำลังเร่งโฆษณาอยู่หรือไม่
   let adStartedAt = 0;
   let adRampSpeed = null;
   let adSkipStartedAt = 0;
@@ -81,8 +85,13 @@
   let lastSkipClickAt = 0;
   let skipClickTimer = null;
   let adMutationSkipTimer = null;
+  let lastAutoNextClickAt = 0;
+  let autoNextDebounceTimer = null;
+  let lastBadgeKey = '';
 
-  // Panel refs
+  // Shadow DOM & Panel refs
+  let shadowHost = null;
+  let shadowRoot = null;
   let panel = null;
   let badge = null;
   let sliderEl = null;
@@ -113,28 +122,61 @@
     }
   }
 
-  function runPageScript(code) {
-    if (!isContextValid() || isShutDown) return;
-    const event = new CustomEvent('SpeedControllerRunScript', { detail: code });
-    document.dispatchEvent(event);
-  }
+  const INJECT_NONCE = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : 'sc-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  let helperScriptInjected = false;
 
-  function injectHelperScript() {
+  function injectHelperScript(onReady) {
     if (!isContextValid() || isShutDown) return;
+    if (helperScriptInjected) {
+      onReady?.();
+      return;
+    }
     try {
       const script = document.createElement('script');
       script.src = chrome.runtime.getURL('inject.js');
-      script.onload = () => script.remove();
+      script.dataset.nonce = INJECT_NONCE;
+      script.onload = () => {
+        helperScriptInjected = true;
+        script.remove();
+        onReady?.();
+      };
+      script.onerror = () => script.remove();
       (document.head || document.documentElement).appendChild(script);
     } catch (e) {
       console.warn('[Speed Controller] Failed to inject helper script:', e);
     }
   }
 
+  function runPageScript(code) {
+    if (!isContextValid() || isShutDown) return;
+    injectHelperScript(() => {
+      const event = new CustomEvent('SpeedControllerRunScript', {
+        detail: { nonce: INJECT_NONCE, code },
+      });
+      document.dispatchEvent(event);
+    });
+  }
+
+  function syncExtensionBadge() {
+    if (!IS_TOP_FRAME || !isContextValid() || isShutDown) return;
+    const speed = getEffectiveSpeed();
+    const key = isCurrentlyInAdTurbo ? 'AD' : String(speed);
+    if (key === lastBadgeKey) return;
+    lastBadgeKey = key;
+    try {
+      chrome.runtime.sendMessage({
+        type: 'UPDATE_BADGE',
+        speed,
+        isAdTurbo: isCurrentlyInAdTurbo,
+      }, () => { void chrome.runtime.lastError; });
+    } catch { /* ignore */ }
+  }
+
   function shutdownOrphanedScript() {
     if (isShutDown) return;
     isShutDown = true;
-    console.log('[Speed Controller] Extension context invalidated. Shutting down orphaned content script cleanly.');
     for (const id of activeIntervals) clearInterval(id);
     activeIntervals.clear();
     for (const obs of activeObservers) {
@@ -144,15 +186,24 @@
     stopAdSkipRetry();
     if (adMutationSkipTimer) clearTimeout(adMutationSkipTimer);
     adMutationSkipTimer = null;
+    if (autoNextDebounceTimer) clearTimeout(autoNextDebounceTimer);
+    autoNextDebounceTimer = null;
     removePanel();
+    if (shadowHost) {
+      shadowHost.remove();
+      shadowHost = null;
+      shadowRoot = null;
+      osdEl = null;
+    }
   }
 
-  function registerInterval(cb, ms) {
+  function registerInterval(cb, ms, runWhenHidden = false) {
     const id = setInterval(() => {
       if (!isContextValid()) {
         shutdownOrphanedScript();
         return;
       }
+      if (!runWhenHidden && document.hidden) return;
       cb();
     }, ms);
     activeIntervals.add(id);
@@ -168,8 +219,11 @@
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
   function getEffectiveSpeed() {
-    if (useSiteSpeed && siteSpeedMap[CURRENT_SITE] !== undefined) {
-      return siteSpeedMap[CURRENT_SITE];
+    if (!IS_TOP_FRAME && frameOverrideSpeed !== null) {
+      return frameOverrideSpeed;
+    }
+    if (useSiteSpeed) {
+      return typeof siteSpeedMap[CURRENT_SITE] === 'number' ? siteSpeedMap[CURRENT_SITE] : 1;
     }
     return currentSpeed;
   }
@@ -223,22 +277,58 @@
 
   let cachedVideos = [];
   let lastVideoScanTime = 0;
+  let lastShadowScanTime = 0;
+  let videoDomDirty = true;
 
-  function collectVideosFromRoot(root, found = []) {
-    if (!root || !root.querySelectorAll) return found;
-    root.querySelectorAll('video').forEach((v) => { if (!found.includes(v)) found.push(v); });
-    root.querySelectorAll('*').forEach((el) => {
-      if (el.shadowRoot) collectVideosFromRoot(el.shadowRoot, found);
-    });
-    return found;
+  function collectShadowVideos(root, found) {
+    if (!root || !root.querySelectorAll) return;
+    const all = root.querySelectorAll('*');
+    for (let i = 0; i < all.length; i++) {
+      const sr = all[i].shadowRoot;
+      if (sr && all[i].id !== 'yt-speed-root') {
+        const vids = sr.querySelectorAll('video');
+        for (let j = 0; j < vids.length; j++) {
+          if (!found.includes(vids[j])) found.push(vids[j]);
+        }
+        collectShadowVideos(sr, found);
+      }
+    }
   }
 
-  function getAllVideos() {
+  function getAllVideos(forceShadowScan = false) {
     const now = Date.now();
-    // แคชผลลัพธ์การค้นหาไว้ 3 วินาที เพื่อหลีกเลี่ยงการสแกน recursive DOM แบบถี่ๆ ช่วยลดการกิน CPU
-    if (now - lastVideoScanTime > 3000 || cachedVideos.length === 0) {
-      cachedVideos = collectVideosFromRoot(document);
+    // Fast O(1) live HTMLCollection lookup for light-DOM videos
+    const liveVideos = document.getElementsByTagName('video');
+    if (liveVideos.length > 0) {
+      const result = [];
+      for (let i = 0; i < liveVideos.length; i++) {
+        result.push(liveVideos[i]);
+      }
+      // Keep any previously found connected shadow videos
+      for (let i = 0; i < cachedVideos.length; i++) {
+        const v = cachedVideos[i];
+        if (v.isConnected && !result.includes(v)) result.push(v);
+      }
+      if ((forceShadowScan || (videoDomDirty && now - lastShadowScanTime > 4000))) {
+        collectShadowVideos(document, result);
+        lastShadowScanTime = now;
+        videoDomDirty = false;
+      }
+      cachedVideos = result;
       lastVideoScanTime = now;
+      return cachedVideos;
+    }
+
+    // No light-DOM videos: only scan Shadow DOM when DOM changed and at most every 4s
+    if (forceShadowScan || (videoDomDirty && now - lastShadowScanTime > 4000)) {
+      const found = [];
+      collectShadowVideos(document, found);
+      cachedVideos = found;
+      lastShadowScanTime = now;
+      lastVideoScanTime = now;
+      videoDomDirty = false;
+    } else if (cachedVideos.length > 0) {
+      cachedVideos = cachedVideos.filter((v) => v.isConnected);
     }
     return cachedVideos;
   }
@@ -527,7 +617,7 @@
 
   function isSafeToHide(el) {
     if (!el || el === document.body || el === document.documentElement) return false;
-    if (el.id === 'yt-speed-panel' || el.closest('#yt-speed-panel')) return false;
+    if (el.id === 'yt-speed-root' || el.id === 'yt-speed-panel' || el.closest('#yt-speed-root, #yt-speed-panel')) return false;
     // ห้ามซ่อนวิดีโอหรือกล่องครอบวิดีโอหลัก
     if (el.tagName === 'VIDEO' || el.querySelector('video')) return false;
     // ห้ามซ่อนแท็กโครงสร้างพื้นฐานหลักของหน้าเว็บ (เช่น main, header หลัก, content area ใหญ่) ถ้าไม่ใช่โฆษณาแท้ๆ
@@ -757,7 +847,7 @@
         for (const node of mutation.addedNodes) {
           if (node.nodeType === 1 && isSafeToHide(node)) {
             // หลีกเลี่ยงการสแกนแผงควบคุมหลักหรือกล่องแสดงผล OSD ของตัวเองเพื่อป้องกัน infinite loops
-            if (node.id === 'yt-speed-panel' || node.closest('#yt-speed-panel') || node.id === 'yt-speed-osd') continue;
+            if (node.id === 'yt-speed-root' || node.id === 'yt-speed-panel' || node.closest('#yt-speed-root, #yt-speed-panel') || node.id === 'yt-speed-osd') continue;
             nodesToScan.add(node);
             shouldQueue = true;
           }
@@ -842,24 +932,59 @@
     }
   }
 
+  // ─── Hold-to-Boost State (Spacebar) ─────────────────────────────────────────
+  let holdBoostActive = false;
+  const HOLD_BOOST_SPEED = 2.5;
+  const HOLD_BOOST_DELAY_MS = 250;
+  let spaceHoldTimer = null;
+  let suppressSpaceKeyup = false;
+
+  // Cache native HTMLMediaElement setters to bypass site-level property shadowing
+  const NATIVE_PLAYBACK_RATE_SET = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate')?.set;
+  const NATIVE_DEFAULT_RATE_SET = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'defaultPlaybackRate')?.set;
+
+  function setNativePlaybackRate(video, rate) {
+    if (NATIVE_DEFAULT_RATE_SET) {
+      NATIVE_DEFAULT_RATE_SET.call(video, rate);
+    } else {
+      video.defaultPlaybackRate = rate;
+    }
+    if (NATIVE_PLAYBACK_RATE_SET) {
+      NATIVE_PLAYBACK_RATE_SET.call(video, rate);
+    } else {
+      video.playbackRate = rate;
+    }
+  }
+
   // ─── Speed Application ───────────────────────────────────────────────────────
   function applyVideoSpeed(video) {
     if (!video) return null;
     const isAd = isAdVideo(video);
-    // เร่ง x16 เฉพาะโฆษณาเมื่อ Ad Turbo เปิด
+    // Priority Stack: 1. Ad Turbo (x16) > 2. Hold-to-Boost > 3. User Effective Speed
     const shouldTurbo = isAd && adTurboEnabled;
-    const targetSpeed = shouldTurbo ? getAdTurboSpeed() : getEffectiveSpeed();
+    const targetSpeed = shouldTurbo
+      ? getAdTurboSpeed()
+      : (holdBoostActive ? HOLD_BOOST_SPEED : getEffectiveSpeed());
     try {
-      if (video.defaultPlaybackRate !== targetSpeed) video.defaultPlaybackRate = targetSpeed;
-      if (video.playbackRate !== targetSpeed) video.playbackRate = targetSpeed;
+      if ('preservesPitch' in video) {
+        video.preservesPitch = targetSpeed <= 4.0;
+      }
+      if (Math.abs(video.defaultPlaybackRate - targetSpeed) >= 0.01 || Math.abs(video.playbackRate - targetSpeed) >= 0.01) {
+        video.__tfLastInternalSetAt = performance.now();
+        setNativePlaybackRate(video, targetSpeed);
+      }
     } catch (e) {
-      console.warn('Speed Controller could not update this video:', e);
+      // Fallback if a browser/DRM pipeline rejects extreme speed (e.g. > 8x or 16x)
+      try {
+        video.__tfLastInternalSetAt = performance.now();
+        video.playbackRate = Math.min(targetSpeed, 16);
+      } catch { /* ignore */ }
     }
     return targetSpeed;
   }
 
   function applyCurrentSpeed() {
-    const videos = getControlVideos();
+    const videos = getAllVideos();
     if (!videos.length) return;
     videos.forEach((v) => applyVideoSpeed(v));
     updateBadge();
@@ -890,17 +1015,435 @@
       sliderEl.value = getEffectiveSpeed();
       if (sliderValueEl) sliderValueEl.textContent = 'x' + getEffectiveSpeed();
     }
+    syncExtensionBadge();
   }
 
+  // ─── Shadow DOM UI Host (100% CSS Isolation + Fullscreen Support) ────────────
+  const SHADOW_UI_STYLES = `
+    :host {
+      all: initial;
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', 'Noto Sans Thai', system-ui, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+
+    /* ── Minimal OSD Pill ── */
+    #yt-speed-osd {
+      position: fixed;
+      top: 48px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-6px) scale(0.96);
+      z-index: 2147483647;
+      background: rgba(14, 14, 17, 0.86);
+      backdrop-filter: blur(14px) saturate(140%);
+      -webkit-backdrop-filter: blur(14px) saturate(140%);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 999px;
+      padding: 7px 14px;
+      display: inline-flex;
+      flex-direction: row;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      color: #fafafa;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.16s ease, transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42);
+      line-height: 1;
+    }
+    #yt-speed-osd.osd-show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0) scale(1);
+    }
+    #yt-speed-osd.osd-fade {
+      opacity: 0;
+      transform: translateX(-50%) translateY(-4px) scale(0.97);
+    }
+    #yt-speed-osd .osd-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #fafafa;
+    }
+    #yt-speed-osd .osd-val {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #fafafa;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.01em;
+    }
+
+    /* ── Minimal Floating Panel ── */
+    #yt-speed-panel {
+      --bg: rgba(13, 13, 16, 0.92);
+      --surface: rgba(255, 255, 255, 0.045);
+      --surface-hover: rgba(255, 255, 255, 0.09);
+      --border: rgba(255, 255, 255, 0.1);
+      --text: #fafafa;
+      --text-soft: #a1a1aa;
+      --text-muted: #71717a;
+      --accent: #fafafa;
+      --accent-ink: #09090b;
+      --turbo: #f59e0b;
+
+      position: fixed;
+      top: 76px;
+      right: 16px;
+      width: 244px;
+      background: var(--bg);
+      backdrop-filter: blur(18px) saturate(150%);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 10px 12px;
+      color: var(--text);
+      box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+      pointer-events: auto;
+      user-select: none;
+      font-size: 12px;
+      line-height: 1.35;
+      z-index: 2147483646;
+      transition: opacity 0.2s ease, width 0.2s ease;
+    }
+    #yt-speed-panel[data-theme="light"] {
+      --bg: rgba(250, 250, 252, 0.94);
+      --surface: rgba(9, 9, 11, 0.045);
+      --surface-hover: rgba(9, 9, 11, 0.09);
+      --border: rgba(9, 9, 11, 0.1);
+      --text: #09090b;
+      --text-soft: #52525b;
+      --text-muted: #71717a;
+      --accent: #09090b;
+      --accent-ink: #fafafa;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14);
+    }
+    #yt-speed-panel.collapsed {
+      width: auto;
+      padding: 6px 52px 6px 10px;
+      border-radius: 999px;
+    }
+    #yt-speed-panel.collapsed .sc-tab-bar,
+    #yt-speed-panel.collapsed .sc-tab-content {
+      display: none;
+    }
+    #yt-speed-panel.collapsed .sc-header {
+      margin-bottom: 0;
+      padding-bottom: 0;
+      border-bottom: none;
+    }
+
+    .sc-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: grab;
+      padding-right: 42px;
+      padding-bottom: 8px;
+      margin-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sc-header:active { cursor: grabbing; }
+    .sc-title {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--text);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .sc-badge {
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-variant-numeric: tabular-nums;
+      cursor: ns-resize;
+    }
+
+    .sc-toggle, .sc-close-panel {
+      position: absolute;
+      top: 8px;
+      width: 20px;
+      height: 20px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      line-height: 1;
+      transition: background 0.14s ease, color 0.14s ease;
+    }
+    .sc-toggle { right: 30px; }
+    .sc-close-panel { right: 8px; }
+    #yt-speed-panel.collapsed .sc-toggle,
+    #yt-speed-panel.collapsed .sc-close-panel {
+      top: 50%;
+      transform: translateY(-50%);
+    }
+    .sc-toggle:hover, .sc-close-panel:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+    }
+
+    .sc-tab-bar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 3px;
+      background: var(--surface);
+      padding: 3px;
+      border-radius: 9px;
+      margin-bottom: 9px;
+    }
+    .sc-tab-btn {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 10.5px;
+      font-weight: 500;
+      padding: 5px 2px;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: all 0.14s ease;
+      white-space: nowrap;
+    }
+    .sc-tab-btn:hover { color: var(--text); }
+    .sc-tab-btn.active {
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-weight: 600;
+    }
+
+    .sc-tab-content { display: none; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
+    .sc-tab-content.active { display: flex; }
+    .sc-tab-content::-webkit-scrollbar { width: 4px; }
+    .sc-tab-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+
+    .sc-slider-wrap { display: flex; flex-direction: column; gap: 5px; }
+    .sc-slider-header { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-soft); }
+    .sc-slider-value { font-size: 14px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+    .sc-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--surface-hover);
+      outline: none;
+      cursor: pointer;
+    }
+    .sc-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+    }
+
+    .sc-quick-grid, .sc-speed-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 4px;
+    }
+    .sc-btn, .sc-preset-btn, .sc-settings-btn {
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-soft);
+      border-radius: 7px;
+      padding: 5px 6px;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.14s ease;
+      font-variant-numeric: tabular-nums;
+    }
+    .sc-btn:hover, .sc-preset-btn:hover, .sc-settings-btn:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+    }
+    .sc-btn.active, .sc-preset-btn.active {
+      background: var(--accent);
+      color: var(--accent-ink);
+      border-color: var(--accent);
+      font-weight: 600;
+    }
+    .sc-turbo-btn, .sc-blocker-btn {
+      width: 100%;
+      text-align: left;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 9px;
+    }
+    .sc-turbo-btn.active {
+      background: var(--turbo);
+      color: #09090b;
+      border-color: var(--turbo);
+    }
+
+    .sc-hint, .sc-settings-hint {
+      font-size: 10px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+    .sc-hint kbd {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--text-soft);
+    }
+
+    .sc-stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+    .sc-stat-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px;
+      text-align: center;
+    }
+    .sc-stat-val { font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+    .sc-stat-label { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+
+    .sc-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 9px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .sc-section-title { font-size: 11px; font-weight: 600; color: var(--text); }
+    .sc-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .sc-settings-label { font-size: 11px; color: var(--text-soft); }
+    .sc-input, .sc-select {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 7px;
+      font-size: 11px;
+      outline: none;
+    }
+    .sc-mini-switch { position: relative; width: 32px; height: 18px; display: inline-block; flex-shrink: 0; }
+    .sc-mini-switch input { opacity: 0; width: 0; height: 0; }
+    .sc-mini-slider {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      background: var(--surface-hover);
+      cursor: pointer;
+      transition: background 0.16s ease;
+    }
+    .sc-mini-slider::before {
+      content: '';
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      left: 3px;
+      top: 3px;
+      border-radius: 50%;
+      background: var(--text-soft);
+      transition: transform 0.16s ease, background 0.16s ease;
+    }
+    .sc-mini-switch input:checked + .sc-mini-slider { background: var(--accent); }
+    .sc-mini-switch input:checked + .sc-mini-slider::before {
+      transform: translateX(14px);
+      background: var(--accent-ink);
+    }
+    .sc-preset-item { display: flex; align-items: center; gap: 4px; }
+    .sc-preset-item .sc-preset-btn { flex: 1; text-align: left; }
+    .sc-preset-del {
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      border-radius: 6px;
+      padding: 4px 7px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .sc-preset-del:hover { color: #ef4444; border-color: rgba(239, 68, 68, 0.4); }
+    .sc-chip-list { display: flex; flex-wrap: wrap; gap: 4px; }
+    .sc-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 10px;
+      color: var(--text-soft);
+    }
+    .sc-chip button {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 0;
+      font-size: 11px;
+    }
+  `;
+
+  function getShadowMountTarget() {
+    return document.fullscreenElement || document.webkitFullscreenElement || document.documentElement || document.body;
+  }
+
+  function syncShadowHostParent() {
+    if (!shadowHost) return;
+    const target = getShadowMountTarget();
+    if (target && shadowHost.parentNode !== target) {
+      target.appendChild(shadowHost);
+    }
+  }
+
+  function ensureShadowRoot() {
+    if (shadowRoot && shadowHost) {
+      syncShadowHostParent();
+      return shadowRoot;
+    }
+    shadowHost = document.createElement('div');
+    shadowHost.id = 'yt-speed-root';
+    shadowRoot = shadowHost.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = SHADOW_UI_STYLES;
+    shadowRoot.appendChild(style);
+    syncShadowHostParent();
+    return shadowRoot;
+  }
+
+  document.addEventListener('fullscreenchange', syncShadowHostParent);
+  document.addEventListener('webkitfullscreenchange', syncShadowHostParent);
+
   // ─── Feature 6: Speed OSD ────────────────────────────────────────────────────
-  function showOSD(speed, direction) {
+  const OSD_ICONS = {
+    up: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3.5 6.8C3.5 5.9 4.5 5.4 5.2 5.9L11.4 10.6C12 11.1 12 11.9 11.4 12.4L5.2 17.1C4.5 17.6 3.5 17.1 3.5 16.2V6.8Z" fill="currentColor" opacity="0.52"/><path d="M12.5 6.8C12.5 5.9 13.5 5.4 14.2 5.9L20.4 10.6C21 11.1 21 11.9 20.4 12.4L14.2 17.1C13.5 17.6 12.5 17.1 12.5 16.2V6.8Z" fill="currentColor"/></svg>',
+    down: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M20.5 6.8C20.5 5.9 19.5 5.4 18.8 5.9L12.6 10.6C12 11.1 12 11.9 12.6 12.4L18.8 17.1C19.5 17.6 20.5 17.1 20.5 16.2V6.8Z" fill="currentColor" opacity="0.52"/><path d="M11.5 6.8C11.5 5.9 10.5 5.4 9.8 5.9L3.6 10.6C3 11.1 3 11.9 3.6 12.4L9.8 17.1C10.5 17.6 11.5 17.1 11.5 16.2V6.8Z" fill="currentColor"/></svg>',
+    neutral: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>',
+    next: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4" fill="currentColor"/><line x1="19" y1="5" x2="19" y2="19"/></svg>',
+  };
+
+  function showOSD(speed, direction, customText = null) {
+    const root = ensureShadowRoot();
+    if (!root) return;
     if (!osdEl) {
       osdEl = document.createElement('div');
       osdEl.id = 'yt-speed-osd';
-      document.body.appendChild(osdEl);
+      root.appendChild(osdEl);
     }
-    const arrow = direction === 'up' ? '⏩' : direction === 'down' ? '⏪' : '↺';
-    osdEl.innerHTML = `<span class="osd-arrow">${arrow}</span><span class="osd-val">x${speed}</span>`;
+    const icon = OSD_ICONS[direction] || OSD_ICONS.neutral;
+    const text = customText !== null ? customText : `x${speed}`;
+    osdEl.innerHTML = `<span class="osd-icon">${icon}</span><span class="osd-val">${text}</span>`;
     osdEl.classList.remove('osd-fade');
     void osdEl.offsetWidth; // reflow to restart animation
     osdEl.classList.add('osd-show');
@@ -910,6 +1453,58 @@
       osdEl.classList.remove('osd-show');
       osdEl.classList.add('osd-fade');
     }, OSD_DURATION);
+  }
+
+  // ─── Auto Next Lesson Mode (jconfirm / E-Learning Dialog) ───────────────────
+  const AUTO_NEXT_TEXT = 'ต้องการเรียนบทถัดไป';
+  const AUTO_NEXT_COOLDOWN_MS = 2500;
+
+  function isElementVisibleForClick(el) {
+    if (!el || !el.isConnected || el.disabled) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function findAutoNextLessonButton() {
+    // 1. Fast path: jconfirm dialog buttons (exact structure reported by user)
+    const jconfirmBtns = document.querySelectorAll('.jconfirm-box .jconfirm-buttons button, [role="dialog"] button');
+    for (let i = 0; i < jconfirmBtns.length; i++) {
+      const btn = jconfirmBtns[i];
+      const text = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (text === AUTO_NEXT_TEXT || (text.includes(AUTO_NEXT_TEXT) && !text.includes('เรียนซ้ำ'))) {
+        if (isElementVisibleForClick(btn)) return btn;
+      }
+    }
+    // 2. Fallback: any visible button matching exact text
+    const allBtns = document.getElementsByTagName('button');
+    for (let i = 0; i < allBtns.length; i++) {
+      const btn = allBtns[i];
+      const text = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (text === AUTO_NEXT_TEXT && isElementVisibleForClick(btn)) {
+        return btn;
+      }
+    }
+    return null;
+  }
+
+  function checkAndClickAutoNextLesson() {
+    if (!autoNextEnabled || isShutDown) return false;
+    const now = Date.now();
+    if (now - lastAutoNextClickAt < AUTO_NEXT_COOLDOWN_MS) return false;
+
+    const btn = findAutoNextLessonButton();
+    if (!btn) return false;
+
+    lastAutoNextClickAt = now;
+    try {
+      btn.click();
+      showOSD('', 'next', 'บทถัดไป');
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // ─── Feature 7: Usage Statistics ─────────────────────────────────────────────
@@ -946,8 +1541,10 @@
   function setSpeed(spd, direction) {
     const clamped = clampSpeed(spd);
 
-    // Feature 2: Per-Site Speed Memory
-    if (useSiteSpeed) {
+    if (!IS_TOP_FRAME) {
+      frameOverrideSpeed = clamped;
+    } else if (useSiteSpeed) {
+      // Feature 2: Per-Site Speed Memory
       siteSpeedMap[CURRENT_SITE] = clamped;
       safeSetStorage({ yt_site_speeds: siteSpeedMap });
     } else {
@@ -972,7 +1569,6 @@
   }
 
   function broadcastSpeedToFrames(speed) {
-    if (!IS_TOP_FRAME) return;
     document.querySelectorAll('iframe').forEach((frame) => {
       try {
         frame.contentWindow?.postMessage({
@@ -991,11 +1587,12 @@
       sliderEl.value = spd;
       if (sliderValueEl) sliderValueEl.textContent = 'x' + spd;
     }
-    // Update preset buttons active state
-    const presetBtns = document.querySelectorAll('.sc-preset-btn');
-    presetBtns.forEach((btn) => {
-      btn.classList.toggle('active', parseFloat(btn.dataset.speed) === spd);
-    });
+    if (panel) {
+      panel.querySelectorAll('.sc-preset-btn').forEach((btn) => {
+        btn.classList.toggle('active', parseFloat(btn.dataset.speed) === spd);
+      });
+    }
+    syncExtensionBadge();
   }
 
   function toggleAdTurbo(nextValue) {
@@ -1109,7 +1706,8 @@
 
   function createPanel() {
     if (!canShowFloatingPanel()) return;
-    if (document.getElementById('yt-speed-panel')) return;
+    const root = ensureShadowRoot();
+    if (!root || root.getElementById('yt-speed-panel')) return;
 
     panel = document.createElement('div');
     panel.id = 'yt-speed-panel';
@@ -1122,7 +1720,7 @@
 
     const title = document.createElement('span');
     title.className = 'sc-title';
-    title.textContent = '⚡ Speed';
+    title.innerHTML = `${OSD_ICONS.up}<span>Speed</span>`;
 
     badge = document.createElement('span');
     badge.className = 'sc-badge';
@@ -1292,6 +1890,12 @@
     toggleBtn.addEventListener('click', () => {
       panel.classList.toggle('collapsed');
       toggleBtn.textContent = panel.classList.contains('collapsed') ? '+' : '−';
+      if (panel.style.left) {
+        const rect = panel.getBoundingClientRect();
+        const safePos = clampPanelPos(rect.left, rect.top);
+        panel.style.left = safePos.x + 'px';
+        panel.style.top = safePos.y + 'px';
+      }
     });
     panel.appendChild(toggleBtn);
 
@@ -1350,13 +1954,13 @@
       safeSetStorage({ yt_panel_pos: { x: sx, y: sy } });
     });
 
-    document.body.appendChild(panel);
+    root.appendChild(panel);
 
     // Restore position
     if (!isContextValid() || isShutDown) return;
     try {
       chrome.storage.local.get('yt_panel_pos', (result) => {
-        if (!isContextValid() || isShutDown || chrome.runtime.lastError) return;
+        if (!isContextValid() || isShutDown || chrome.runtime.lastError || !panel) return;
         if (result && result.yt_panel_pos) {
           const { x, y } = result.yt_panel_pos;
           const safePos = clampPanelPos(Number(x) || 16, Number(y) || 16);
@@ -1375,7 +1979,7 @@
   }
 
   window.addEventListener('resize', () => {
-    if (!panel) return;
+    if (!panel || !panel.style.left) return;
     const rect = panel.getBoundingClientRect();
     const safePos = clampPanelPos(rect.left, rect.top);
     panel.style.left = safePos.x + 'px';
@@ -1384,17 +1988,18 @@
 
   function switchTab(id) {
     activeTab = id;
-    document.querySelectorAll('.sc-tab-btn').forEach((btn) => {
+    if (!panel) return;
+    panel.querySelectorAll('.sc-tab-btn').forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.tab === id);
     });
-    document.querySelectorAll('.sc-tab-content').forEach((content) => {
+    panel.querySelectorAll('.sc-tab-content').forEach((content) => {
       content.classList.toggle('active', content.dataset.tabContent === id);
     });
   }
 
   function updateHintText(el) {
     const s = shortcuts;
-    const hint = el || document.getElementById('sc-shortcut-hint');
+    const hint = el || (shadowRoot ? shadowRoot.getElementById('sc-shortcut-hint') : null);
     if (!hint) return;
     hint.innerHTML = `<kbd>${s.lower}</kbd> ลด &nbsp;<kbd>${s.raise}</kbd> เพิ่ม &nbsp;<kbd>${s.reset}</kbd> Reset &nbsp;<kbd>${s.turbo}</kbd> Turbo`;
   }
@@ -1421,7 +2026,7 @@
       applyBtn.innerHTML = `<span class="preset-name">${preset.name}</span><span class="preset-spd">x${preset.speed}</span>`;
       applyBtn.addEventListener('click', () => {
         setSpeed(preset.speed, preset.speed > getEffectiveSpeed() ? 'up' : 'down');
-        document.querySelectorAll('.sc-preset-btn').forEach((b) => b.classList.remove('active'));
+        if (panel) panel.querySelectorAll('.sc-preset-btn').forEach((b) => b.classList.remove('active'));
         applyBtn.classList.add('active');
       });
 
@@ -1493,7 +2098,9 @@
     const siteSwitch = createToggleSwitch(useSiteSpeed, (val) => {
       useSiteSpeed = val;
       safeSetStorage({ yt_use_site_speed: val });
+      syncSpeedUI();
       applyCurrentSpeed();
+      broadcastSpeedToFrames(getEffectiveSpeed());
       updateSiteSpeedLabel();
     });
     siteRow.appendChild(siteLabel);
@@ -1511,9 +2118,26 @@
     clearSiteBtn.addEventListener('click', () => {
       delete siteSpeedMap[CURRENT_SITE];
       safeSetStorage({ yt_site_speeds: siteSpeedMap });
+      syncSpeedUI();
+      applyCurrentSpeed();
+      broadcastSpeedToFrames(getEffectiveSpeed());
       updateSiteSpeedLabel();
     });
     siteSection.appendChild(clearSiteBtn);
+
+    const autoNextRow = document.createElement('div');
+    autoNextRow.className = 'sc-settings-row';
+    const autoNextLabel = document.createElement('span');
+    autoNextLabel.className = 'sc-settings-label';
+    autoNextLabel.textContent = 'Auto Next Lesson';
+    const autoNextSwitch = createToggleSwitch(autoNextEnabled, (val) => {
+      autoNextEnabled = val;
+      safeSetStorage({ yt_auto_next: val });
+      if (val) checkAndClickAutoNextLesson();
+    });
+    autoNextRow.appendChild(autoNextLabel);
+    autoNextRow.appendChild(autoNextSwitch);
+    siteSection.appendChild(autoNextRow);
 
     // ── Feature 4: Theme ──
     const themeSection = createSection(container, 'ธีม & ความโปร่งใส');
@@ -1803,7 +2427,7 @@
   }
 
   function removePanel() {
-    const el = document.getElementById('yt-speed-panel');
+    const el = shadowRoot ? shadowRoot.getElementById('yt-speed-panel') : null;
     if (el) el.remove();
     panel = null;
     badge = null;
@@ -1830,6 +2454,7 @@
         if (typeof result.yt_speed === 'number') currentSpeed = result.yt_speed;
         if (typeof result.yt_ad_turbo === 'boolean') adTurboEnabled = result.yt_ad_turbo;
         if (typeof result.yt_ad_blocker === 'boolean') adBlockerEnabled = result.yt_ad_blocker;
+        if (typeof result.yt_auto_next === 'boolean') autoNextEnabled = result.yt_auto_next;
         if (typeof result.yt_show_panel === 'boolean') showPanel = result.yt_show_panel;
         if (typeof result.yt_opacity === 'number') panelOpacity = result.yt_opacity;
         if (typeof result.yt_theme === 'string') currentTheme = result.yt_theme;
@@ -1846,13 +2471,20 @@
         if (Array.isArray(result.yt_gambling_domains) && result.yt_gambling_domains.length) gamblingDomains = result.yt_gambling_domains;
         isStateLoaded = true;
 
+        syncSpeedUI();
         syncAdTurboUI();
         syncAdBlockerUI();
         if (adBlockerEnabled) {
           watchForInjectedAds();
           scanAndBlockOverlays();
         }
-        waitForVideo(() => applyCurrentSpeed());
+        if (autoNextEnabled) {
+          checkAndClickAutoNextLesson();
+        }
+        waitForVideo(() => {
+          applyCurrentSpeed();
+          broadcastSpeedToFrames(getEffectiveSpeed());
+        });
       });
     } catch (e) {
       console.warn('[Speed Controller] Failed to load saved state:', e);
@@ -1873,8 +2505,11 @@
 
           if (changes.yt_speed) {
             currentSpeed = changes.yt_speed.newValue ?? currentSpeed;
-            syncSpeedUI();
-            applyCurrentSpeed();
+            if (!useSiteSpeed) {
+              syncSpeedUI();
+              applyCurrentSpeed();
+              broadcastSpeedToFrames(getEffectiveSpeed());
+            }
           }
           if (changes.yt_ad_turbo) {
             adTurboEnabled = changes.yt_ad_turbo.newValue !== false;
@@ -1890,6 +2525,10 @@
             } else {
               stopWatchingInjectedAds();
             }
+          }
+          if (changes.yt_auto_next) {
+            autoNextEnabled = Boolean(changes.yt_auto_next.newValue);
+            if (autoNextEnabled) checkAndClickAutoNextLesson();
           }
           if (changes.yt_skip_keywords) {
             if (Array.isArray(changes.yt_skip_keywords.newValue) && changes.yt_skip_keywords.newValue.length) {
@@ -1914,9 +2553,20 @@
             currentTheme = changes.yt_theme.newValue;
             applyTheme();
           }
+          if (changes.yt_use_site_speed) {
+            useSiteSpeed = changes.yt_use_site_speed.newValue !== false;
+            syncSpeedUI();
+            applyCurrentSpeed();
+            broadcastSpeedToFrames(getEffectiveSpeed());
+            updateSiteSpeedLabel();
+          }
           if (changes.yt_site_speeds) {
             siteSpeedMap = changes.yt_site_speeds.newValue || {};
-            applyCurrentSpeed();
+            if (useSiteSpeed) {
+              syncSpeedUI();
+              applyCurrentSpeed();
+              broadcastSpeedToFrames(getEffectiveSpeed());
+            }
             updateSiteSpeedLabel();
           }
         } catch (e) {
@@ -1933,11 +2583,20 @@
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!message || isShutDown) return;
       if (message.type === 'SET_SPEED' && Number.isFinite(Number(message.speed))) {
-        setSpeed(Number(message.speed), 'neutral');
-        sendResponse({ ok: true, speed: getEffectiveSpeed() });
-        return true;
+        const nextSpeed = clampSpeed(Number(message.speed));
+        if (IS_TOP_FRAME) {
+          setSpeed(nextSpeed, 'neutral');
+          sendResponse({ ok: true, speed: getEffectiveSpeed() });
+          return true;
+        }
+        // In child iframes: apply directly without polluting siteSpeedMap or racing sendResponse
+        frameOverrideSpeed = nextSpeed;
+        applyCurrentSpeed();
+        broadcastSpeedToFrames(nextSpeed);
+        return;
       }
       if (message.type === 'GET_SPEED') {
+        if (!IS_TOP_FRAME) return;
         sendResponse({ ok: true, speed: getEffectiveSpeed(), site: CURRENT_SITE });
         return true;
       }
@@ -1948,7 +2607,10 @@
     const data = event.data;
     if (!data || data.source !== 'speed-controller-turbo') return;
     if (data.type === 'SET_SPEED' && !IS_TOP_FRAME && Number.isFinite(Number(data.speed))) {
-      setSpeed(Number(data.speed), 'neutral');
+      frameOverrideSpeed = clampSpeed(Number(data.speed));
+      syncSpeedUI();
+      applyCurrentSpeed();
+      broadcastSpeedToFrames(frameOverrideSpeed);
     }
   });
 
@@ -1963,7 +2625,10 @@
     window.addEventListener('message', (event) => {
       const data = event.data;
       if (!data || data.source !== 'speed-controller-turbo' || data.type !== 'FRAME_VIDEO_AVAILABLE') return;
-      if (isStateLoaded && showPanel && isSiteAllowed()) createPanel();
+      if (isStateLoaded) {
+        broadcastSpeedToFrames(getEffectiveSpeed());
+        if (showPanel && isSiteAllowed()) createPanel();
+      }
     });
   }
 
@@ -1981,10 +2646,42 @@
   }, SPEED_SYNC_INTERVAL);
 
   // ─── Ad Turbo Engine (main loop) ──────────────────────────────────────────
+  function resetAdTurboState() {
+    if (!isCurrentlyInAdTurbo) return;
+    isCurrentlyInAdTurbo = false;
+    stopAdSkipRetry();
+    const restoreSpeed = preAdSpeed || getEffectiveSpeed();
+    const videos = getAllVideos();
+    videos.forEach((video) => {
+      try {
+        video.__tfLastInternalSetAt = performance.now();
+        video.playbackRate = restoreSpeed;
+        video.defaultPlaybackRate = restoreSpeed;
+      } catch { /* ignore */ }
+      try {
+        if (preAdMutedStates.has(video)) video.muted = preAdMutedStates.get(video);
+        if (preAdVolumeStates.has(video)) {
+          const vol = preAdVolumeStates.get(video);
+          if (typeof vol === 'number' && vol >= 0 && vol <= 1) video.volume = vol;
+        }
+      } catch { /* ignore */ }
+    });
+    preAdMutedStates = new WeakMap();
+    preAdVolumeStates = new WeakMap();
+    preAdSpeed = null;
+    adStartedAt = 0;
+    adRampSpeed = null;
+    updateBadge();
+  }
+
   registerInterval(() => {
     if (!adTurboEnabled) return;
 
     const videos = getAllVideos();
+    if (!videos.length) {
+      if (isCurrentlyInAdTurbo) resetAdTurboState();
+      return;
+    }
     const hasAd = videos.some(isAdVideo);
 
     if (hasAd) {
@@ -1995,7 +2692,7 @@
         adStartedAt = Date.now();
         adRampSpeed = randomAdRampSpeed();
         startAdSkipRetry();
-        console.log(`[Ad Turbo] Ad detected! Ramp x${adRampSpeed} for 5s, then x16`);
+        updateBadge();
       }
 
       // เร่ง x16 + Mute อัตโนมัติ
@@ -2004,9 +2701,10 @@
           const adSpeed = getAdTurboSpeed();
           if (video.playbackRate !== adSpeed) video.playbackRate = adSpeed;
           if (video.defaultPlaybackRate !== adSpeed) video.defaultPlaybackRate = adSpeed;
-          
+
           if (!preAdMutedStates.has(video)) {
             preAdMutedStates.set(video, video.muted);
+            preAdVolumeStates.set(video, video.volume);
           }
           if (!video.muted) {
             video.muted = true;
@@ -2019,30 +2717,18 @@
 
     } else if (isCurrentlyInAdTurbo) {
       // โฆษณาจบแล้ว → ปรับกลับสปีดเดิม และเปิดเสียงกลับมาเท่าเดิม
-      isCurrentlyInAdTurbo = false;
-      stopAdSkipRetry();
       const restoreSpeed = preAdSpeed || getEffectiveSpeed();
-      videos.forEach((video) => {
-        try {
-          video.playbackRate = restoreSpeed;
-          video.defaultPlaybackRate = restoreSpeed;
-        } catch { /* ignore */ }
-
-        try {
-          if (preAdMutedStates.has(video)) {
-            video.muted = preAdMutedStates.get(video);
-          }
-        } catch { /* ignore */ }
-      });
-      preAdMutedStates.clear();
-      preAdSpeed = null;
-      adStartedAt = 0;
-      adRampSpeed = null;
-      console.log(`[Ad Turbo] Ad ended. Restored speed to x${restoreSpeed} and restored audio`);
+      resetAdTurboState();
       showOSD(restoreSpeed, 'neutral');
-      updateBadge();
     }
   }, AD_SYNC_INTERVAL);
+
+  // ─── Auto Next Lesson Periodic Check ──────────────────────────────────────
+  registerInterval(() => {
+    if (autoNextEnabled) {
+      checkAndClickAutoNextLesson();
+    }
+  }, 1200);
 
   // ─── Ad Overlay Blocker Engine (Periodic Scan) ────────────────────────────
   registerInterval(() => {
@@ -2051,9 +2737,31 @@
     }
   }, AD_BLOCKER_SCAN_INTERVAL);
 
-  // ─── Feature 3: Keyboard Shortcuts ───────────────────────────────────────────
+  // ─── Feature 3: Keyboard Shortcuts + Hold Spacebar to Boost ──────────────────
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    // Hold Spacebar (>250ms) to temporarily boost speed to x2.5
+    if (e.code === 'Space' && getAllVideos().length > 0) {
+      if (e.repeat) {
+        if (holdBoostActive) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+        return;
+      }
+      if (!spaceHoldTimer && !holdBoostActive) {
+        spaceHoldTimer = setTimeout(() => {
+          spaceHoldTimer = null;
+          holdBoostActive = true;
+          suppressSpaceKeyup = true;
+          applyCurrentSpeed();
+          showOSD(HOLD_BOOST_SPEED, 'up');
+        }, HOLD_BOOST_DELAY_MS);
+      }
+      return;
+    }
 
     const spd = getEffectiveSpeed();
 
@@ -2073,6 +2781,36 @@
       e.preventDefault(); e.stopPropagation();
       toggleAdTurbo(!adTurboEnabled);
     }
+  }, true);
+
+  document.addEventListener('keyup', (e) => {
+    if (e.code !== 'Space') return;
+    clearTimeout(spaceHoldTimer);
+    spaceHoldTimer = null;
+
+    if (holdBoostActive) {
+      holdBoostActive = false;
+      applyCurrentSpeed();
+      showOSD(getEffectiveSpeed(), 'neutral');
+      if (suppressSpaceKeyup) {
+        suppressSpaceKeyup = false;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const vids = getControlVideos();
+        if (vids[0] && vids[0].paused) {
+          vids[0].play().catch(() => {});
+        }
+      }
+    }
+  }, true);
+
+  window.addEventListener('blur', () => {
+    clearTimeout(spaceHoldTimer);
+    spaceHoldTimer = null;
+    if (holdBoostActive) {
+      holdBoostActive = false;
+      applyCurrentSpeed();
+    }
   });
 
   // ─── Feature 9: Mouse Wheel on Video ─────────────────────────────────────────
@@ -2087,20 +2825,59 @@
     setSpeed(clampSpeed(getEffectiveSpeed() + step), step > 0 ? 'up' : 'down');
   }, { passive: false, capture: true });
 
-  // ─── URL Change Detection ─────────────────────────────────────────────────────
-  const mutationObserver = new MutationObserver(() => {
+  // ─── Lightweight SPA URL Detection & Targeted DOM Observer ──────────────────
+  function handleUrlChange() {
+    if (location.href === lastUrl) return;
+    lastUrl = location.href;
+    cachedVideos = [];
+    lastVideoScanTime = 0;
+    videoDomDirty = true;
+    resetAdTurboState();
+    waitForVideo(() => {
+      applyCurrentSpeed();
+      broadcastSpeedToFrames(getEffectiveSpeed());
+    });
+  }
+
+  if (typeof window.navigation !== 'undefined' && window.navigation.addEventListener) {
+    window.navigation.addEventListener('navigatesuccess', handleUrlChange);
+  }
+  window.addEventListener('popstate', handleUrlChange);
+  window.addEventListener('hashchange', handleUrlChange);
+  window.addEventListener('yt-navigate-finish', handleUrlChange);
+
+  const mutationObserver = new MutationObserver((mutations) => {
     if (!isContextValid() || isShutDown) {
       shutdownOrphanedScript();
       return;
     }
     if (location.href !== lastUrl) {
-      lastUrl = location.href;
-      cachedVideos = [];
-      lastVideoScanTime = 0;
-      waitForVideo(() => {
-        applyCurrentSpeed();
-      });
+      handleUrlChange();
     }
+
+    let sawNewElement = false;
+    for (let i = 0; i < mutations.length; i++) {
+      const added = mutations[i].addedNodes;
+      for (let j = 0; j < added.length; j++) {
+        const n = added[j];
+        if (n.nodeType === 1 && n.id !== 'yt-speed-root') {
+          sawNewElement = true;
+          break;
+        }
+      }
+      if (sawNewElement) break;
+    }
+
+    if (sawNewElement) {
+      videoDomDirty = true;
+      if (autoNextEnabled && !autoNextDebounceTimer) {
+        autoNextDebounceTimer = setTimeout(() => {
+          autoNextDebounceTimer = null;
+          checkAndClickAutoNextLesson();
+        }, 120);
+      }
+    }
+
     if (isCurrentlyInAdTurbo && isYouTube() && !adMutationSkipTimer) {
       adMutationSkipTimer = setTimeout(() => {
         adMutationSkipTimer = null;
@@ -2114,7 +2891,7 @@
     activeObservers.add(mutationObserver);
   }
 
-  // ─── Tag Videos ──────────────────────────────────────────────────────────────
+  // ─── Tag Videos (with Exponential Backoff Fight-Back) ───────────────────────
   function tagVideos() {
     const videos = getAllVideos();
     videos.forEach((video) => {
@@ -2122,23 +2899,33 @@
       video.dataset.ytSpeedKey = video.__ytSpeedKey;
       if (!video.__ytSpeedListenersAttached) {
         video.__ytSpeedListenersAttached = true;
-        ['play', 'playing', 'loadedmetadata', 'ratechange', 'durationchange'].forEach((ev) => {
+        video.__tfFightBackCount = 0;
+
+        ['play', 'playing', 'loadedmetadata', 'durationchange'].forEach((ev) => {
           video.addEventListener(ev, () => {
             window.setTimeout(() => applyVideoSpeed(video), 0);
           });
+        });
+
+        video.addEventListener('ratechange', () => {
+          // Ignore ratechange fired by our own assignment
+          if (performance.now() - (video.__tfLastInternalSetAt || 0) < 60) return;
+
+          clearTimeout(video.__tfFightBackTimer);
+          video.__tfFightBackTimer = window.setTimeout(() => {
+            applyVideoSpeed(video);
+          }, 40);
         });
       }
     });
   }
 
   // ─── Init ───────────────────────────────────────────────────────────────────
-  injectHelperScript();
   loadSavedState();
   initStatsTracking();
   waitForVideo(() => {
     createPanel();
     tagVideos();
     applyCurrentSpeed();
-    console.log('Speed Controller Turbo v3.0 (Ad Turbo) ready!');
   });
 })();
